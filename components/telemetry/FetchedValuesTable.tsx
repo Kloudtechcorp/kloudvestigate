@@ -1,9 +1,10 @@
 import { useMemo, useState } from "react";
+import { Maximize2, Minimize2 } from "lucide-react";
 import type { TelemetryAnalysis, TelemetryRecord } from "@/lib/telemetry-types";
 import type { MetricInvestigationAnalysis } from "./types";
 import { formatTime } from "./utils";
 
-type TableMode = "normal" | "full" | "hidden";
+type TableMode = "normal" | "full";
 
 export function FetchedValuesTable({
   analysis,
@@ -63,43 +64,43 @@ export function FetchedValuesTable({
       });
   }, [series, timestampSortDirection]);
 
-  if (mode === "hidden") {
-    return (
-      <button className="nav-pill w-fit" type="button" onClick={() => setMode("normal")}>
-        Show fetched values
-      </button>
-    );
-  }
-
   const panelClass = mode === "full"
-    ? "panel fixed inset-x-4 top-4 bottom-4 z-30 overflow-hidden"
+    ? "panel fixed inset-x-4 top-16 bottom-4 z-30 overflow-hidden"
     : "panel min-w-0 overflow-hidden";
 
   return (
     <div className={panelClass}>
       <div className="flex h-full min-w-0 flex-col">
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+      <div className="flex flex-col gap-2 border-b border-border bg-bg-raised px-4 py-2 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="panel-title">Fetched Values</h2>
-          <p className="mt-1 text-sm text-muted-foreground">
-            All normalized records returned from the selected history endpoint. Outlier rows are highlighted.
-          </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <span className="status-chip">{rowCount} rows</span>
           <span className="status-chip">{metricCount} metrics</span>
-          <button className="nav-pill" type="button" onClick={() => setMode("normal")}>
-            Minimize
+          <button
+            aria-label="Minimize fetched values"
+            aria-pressed={mode === "normal"}
+            className={`icon-button ${mode === "normal" ? "nav-pill-active" : ""}`}
+            title="Minimize"
+            type="button"
+            onClick={() => setMode("normal")}
+          >
+            <Minimize2 aria-hidden="true" className="h-4 w-4" />
           </button>
-          <button className="nav-pill" type="button" onClick={() => setMode("full")}>
-            Expand
-          </button>
-          <button className="nav-pill" type="button" onClick={() => setMode("hidden")}>
-            Hide
+          <button
+            aria-label="Expand fetched values"
+            aria-pressed={mode === "full"}
+            className={`icon-button ${mode === "full" ? "nav-pill-active" : ""}`}
+            title="Expand"
+            type="button"
+            onClick={() => setMode("full")}
+          >
+            <Maximize2 aria-hidden="true" className="h-4 w-4" />
           </button>
         </div>
       </div>
-      <div className={`mt-3 min-w-0 overflow-auto ${mode === "full" ? "min-h-0 flex-1" : "max-h-105"}`}>
+      <div className={`min-w-0 overflow-auto ${mode === "full" ? "min-h-0 flex-1" : "max-h-105"}`}>
         <table className="ops-table">
           <thead>
             <tr>
@@ -120,14 +121,14 @@ export function FetchedValuesTable({
           </thead>
           <tbody>
             {groupedRows.map(([timestamp, metricValues]) => (
-              <tr key={timestamp}>
+              <tr className={getRowClass(metricValues)} key={timestamp}>
                 <td className="font-mono">{formatTime(timestamp)}</td>
                 {series.map((item) => {
                   const value = metricValues[item.metric];
                   if (!value) {
                     return (
                       <td key={`${timestamp}-${item.metric}`}>
-                        <span className="text-chart-empty">-</span>
+                        <span className="text-text-muted italic">—</span>
                       </td>
                     );
                   }
@@ -146,7 +147,7 @@ export function FetchedValuesTable({
                       }
                     >
                       <div className="grid gap-1">
-                        <span className={value.range || value.spike ? "font-semibold" : "font-normal"}>{value.value}</span>
+                        <span className={`font-mono ${value.range ? "font-semibold text-danger" : value.spike ? "font-semibold text-warning" : ""}`}>{value.value}</span>
                         <div className="flex flex-wrap gap-1">
                           {value.range ? <span className="mini-chip mini-chip-danger">range</span> : null}
                           {value.spike ? <span className="mini-chip mini-chip-caution">jump</span> : null}
@@ -163,4 +164,11 @@ export function FetchedValuesTable({
       </div>
     </div>
   );
+}
+
+function getRowClass(metricValues: Record<string, { value: number; range: boolean; spike: boolean }>) {
+  const values = Object.values(metricValues);
+  if (values.some((value) => value.range)) return "row-outlier";
+  if (values.some((value) => value.spike)) return "row-spike";
+  return "";
 }

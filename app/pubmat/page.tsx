@@ -17,16 +17,15 @@ export default async function PubmatPage({ searchParams }: PubmatPageProps) {
   return (
     <PageShell
       eyebrow="Pubmat data prep"
-      title="Station Aggregate Table"
+      title="Daily Readings"
+      maxWidth="standard"
     >
-      <main className="grid gap-5">
-        <PubmatWorkspace
-          autoRun={autoRun}
-          initialIntervalMinutes={initialIntervalMinutes}
-          initialMetric={initialMetric}
-          metrics={metrics}
-        />
-      </main>
+      <PubmatWorkspace
+        autoRun={autoRun}
+        initialIntervalMinutes={initialIntervalMinutes}
+        initialMetric={initialMetric}
+        metrics={metrics}
+      />
     </PageShell>
   );
 }
