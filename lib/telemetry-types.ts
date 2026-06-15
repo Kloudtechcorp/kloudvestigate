@@ -195,28 +195,3 @@ export interface TelemetryAnalysis {
   latestReading: TelemetryRecord | null;
 }
 
-export interface InvestigationContext {
-  station: StationMetadata;
-  metric: InvestigationMetricKey;
-  metricProfile: MetricAnalysisProfile;
-  timeRange: { start: string; end: string };
-  latestTimestamp: string | null;
-  summary: TelemetryAnalysis["summary"];
-  spikes: SpikeEvent[];
-  rangeViolations: RangeViolation[];
-  thresholdCrossings: ThresholdCrossing[];
-  missingPeriods: MissingPeriod[];
-  duplicateTimestamps: DuplicateTimestamp[];
-  flatlinePeriods: FlatlinePeriod[];
-  intervalSummaries: IntervalSummary[];
-  significantReadings: {
-    highest: TelemetryRecord | null;
-    latest: TelemetryRecord | null;
-  };
-  warningLevels: WarningLevel[];
-  tokenBudget: {
-    strategy: string;
-    estimatedTokens: number;
-    rawRecordsOmitted: number;
-  };
-}

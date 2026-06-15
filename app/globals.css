@@ -292,7 +292,7 @@ textarea {
 
 .primary-action,
 .nav-pill,
-.question-button,
+.quick-link-button,
 .icon-button {
   min-height: 38px;
   border-radius: 6px;
@@ -316,7 +316,7 @@ textarea {
 }
 
 .nav-pill,
-.question-button {
+.quick-link-button {
   background: var(--surface);
   color: var(--card-foreground);
 }
@@ -352,7 +352,7 @@ textarea {
   color: var(--secondary-foreground);
 }
 
-.question-button {
+.quick-link-button {
   text-align: left;
 }
 
@@ -408,31 +408,10 @@ textarea {
 }
 
 .nav-pill:hover,
-.question-button:hover,
+.quick-link-button:hover,
 .icon-button:hover {
   border-color: var(--ring);
   background: var(--surface-subtle);
-}
-
-.chat-launcher {
-  position: relative;
-  display: inline-flex;
-  min-height: 48px;
-  min-width: 48px;
-  align-items: center;
-  justify-content: center;
-  border-radius: 999px;
-  border: 1px solid var(--primary);
-  background: var(--primary);
-  color: var(--primary-foreground);
-  box-shadow: 0 14px 30px var(--shadow-color-strong);
-  transition: transform 120ms ease, background 120ms ease, box-shadow 120ms ease;
-}
-
-.chat-launcher:hover {
-  background: var(--primary-hover);
-  box-shadow: 0 16px 34px var(--shadow-color-stronger);
-  transform: translateY(-1px);
 }
 
 .status-chip {
@@ -567,65 +546,6 @@ textarea {
   border-left: 3px solid var(--danger-foreground);
   background: var(--danger-surface-strong);
   color: var(--danger-foreground-deep);
-}
-
-.markdown-response {
-  display: grid;
-  gap: 10px;
-}
-
-.markdown-response h2,
-.markdown-response h3 {
-  color: var(--heading);
-  font-weight: 700;
-  line-height: 1.35;
-}
-
-.markdown-response h2 {
-  font-size: 1rem;
-  margin-top: 4px;
-}
-
-.markdown-response h3 {
-  font-size: 0.92rem;
-}
-
-.markdown-response p {
-  margin: 0;
-}
-
-.markdown-response ul,
-.markdown-response ol {
-  display: grid;
-  gap: 6px;
-  margin: 0;
-  padding-left: 18px;
-}
-
-.markdown-response li {
-  padding-left: 2px;
-}
-
-.markdown-response code {
-  border: 1px solid var(--border-subtle);
-  border-radius: 4px;
-  background: var(--surface);
-  padding: 1px 4px;
-  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-  font-size: 0.85em;
-}
-
-.markdown-response pre {
-  overflow-x: auto;
-  border: 1px solid var(--border-subtle);
-  border-radius: 6px;
-  background: var(--surface);
-  padding: 10px;
-}
-
-.markdown-response pre code {
-  border: 0;
-  padding: 0;
 }
 
 .diagram-node {

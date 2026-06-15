@@ -19,7 +19,6 @@ const PRIMARY_NAV_LINKS: PageNavLink[] = [
 const SECONDARY_NAV_LINKS: PageNavLink[] = [
   { href: "/config", label: "Metric Config" },
   { href: "/architecture", label: "Architecture" },
-  { href: "/debug/ai-context", label: "AI Context Viewer" },
 ];
 
 type PageShellProps = {
