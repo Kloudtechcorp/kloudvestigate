@@ -43,7 +43,10 @@ interface BucketWindow {
   fetchEnd: string;
 }
 
+type PubmatQuickFetchResult = Awaited<ReturnType<typeof fetchStationBucket>>;
+
 const validMetrics: InvestigationMetricKey[] = ["all", ...allMetricKeys];
+const activeFetchKeys = new Set<string>();
 
 export async function POST(request: Request) {
   const denied = assertInternalAccess(request);
@@ -53,47 +56,89 @@ export async function POST(request: Request) {
     const metricRangeOverrides = await readMetricRangeOverridesFromCookies();
     const kloudtrackConfig = resolveKloudtrackConfigFromRequest(request);
     const body = (await request.json()) as PubmatQuickFetchBody;
-    const metric = body.metric && validMetrics.includes(body.metric) ? body.metric : "precipitation";
+    const metric = body.metric && validMetrics.includes(body.metric) ? body.metric : "temperature";
     const intervalMinutes = clampInterval(body.intervalMinutes);
     const requestGapMs = Math.max(body.requestGapMs ?? 600, 350);
     const useDemoData = body.useDemoData || !kloudtrackConfig.apiToken;
     const window = buildBucketWindow(body.timestamp, intervalMinutes);
     const selectedMetricKeys = metric === "all" ? allMetricKeys : [metric];
-    const stations = await loadStations(useDemoData, kloudtrackConfig);
-    const results = [];
+    const fetchKey = buildFetchKey(kloudtrackConfig.environment, metric, intervalMinutes, window);
 
-    for (const [index, station] of stations.entries()) {
-      if (request.signal.aborted) break;
+    if (activeFetchKeys.has(fetchKey)) {
+      return Response.json(
+        {
+          error: "Pubmat quick fetch already running",
+          message: "A Daily Readings fetch with the same metric, timestamp, interval, and environment is already running.",
+        },
+        { status: 409 },
+      );
+    }
 
-      results.push(await fetchStationBucket(
-        station,
+    activeFetchKeys.add(fetchKey);
+
+    let stations: StationMetadata[];
+    try {
+      stations = await loadStations(useDemoData, kloudtrackConfig);
+    } catch (error) {
+      activeFetchKeys.delete(fetchKey);
+      throw error;
+    }
+    const streamRequested = request.headers.get("accept")?.includes("application/x-ndjson");
+
+    if (streamRequested) {
+      return streamPubmatFetch({
+        request,
+        fetchKey,
+        stations,
         metric,
         selectedMetricKeys,
+        intervalMinutes,
+        requestGapMs,
         window,
         useDemoData,
         kloudtrackConfig,
         metricRangeOverrides,
-      ));
-
-      if (index < stations.length - 1 && !request.signal.aborted) {
-        await sleep(requestGapMs);
-      }
+      });
     }
 
-    return Response.json({
-      selection: {
-        metric,
-        intervalMinutes,
-        requestGapMs,
-        selectedMetricKeys,
-        timestamp: window.bucketEnd,
-      },
-      window,
-      source: useDemoData ? "demo" : "kloudtrack",
-      environment: kloudtrackConfig.environment,
-      stationCount: stations.length,
-      results,
-    });
+    try {
+      const results = [];
+
+      for (const [index, station] of stations.entries()) {
+        if (request.signal.aborted) break;
+
+        results.push(await fetchStationBucket(
+          station,
+          metric,
+          selectedMetricKeys,
+          window,
+          useDemoData,
+          kloudtrackConfig,
+          metricRangeOverrides,
+        ));
+
+        if (index < stations.length - 1 && !request.signal.aborted) {
+          await sleep(requestGapMs);
+        }
+      }
+
+      return Response.json({
+        selection: {
+          metric,
+          intervalMinutes,
+          requestGapMs,
+          selectedMetricKeys,
+          timestamp: window.bucketEnd,
+        },
+        window,
+        source: useDemoData ? "demo" : "kloudtrack",
+        environment: kloudtrackConfig.environment,
+        stationCount: stations.length,
+        results,
+      });
+    } finally {
+      activeFetchKeys.delete(fetchKey);
+    }
   } catch (error) {
     return Response.json(
       {
@@ -103,6 +148,122 @@ export async function POST(request: Request) {
       { status: 400 },
     );
   }
+}
+
+function streamPubmatFetch({
+  request,
+  fetchKey,
+  stations,
+  metric,
+  selectedMetricKeys,
+  intervalMinutes,
+  requestGapMs,
+  window,
+  useDemoData,
+  kloudtrackConfig,
+  metricRangeOverrides,
+}: {
+  request: Request;
+  fetchKey: string;
+  stations: StationMetadata[];
+  metric: InvestigationMetricKey;
+  selectedMetricKeys: MetricKey[];
+  intervalMinutes: number;
+  requestGapMs: number;
+  window: BucketWindow;
+  useDemoData: boolean;
+  kloudtrackConfig: KloudtrackEnvironmentConfig;
+  metricRangeOverrides: Record<string, { minimum: number; maximum: number }>;
+}) {
+  const encoder = new TextEncoder();
+  const source = useDemoData ? "demo" : "kloudtrack";
+
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      const results: PubmatQuickFetchResult[] = [];
+
+      function send(event: string, payload: Record<string, unknown>) {
+        controller.enqueue(encoder.encode(`${JSON.stringify({ event, ...payload })}\n`));
+      }
+
+      try {
+        send("init", {
+          selection: {
+            metric,
+            intervalMinutes,
+            requestGapMs,
+            selectedMetricKeys,
+            timestamp: window.bucketEnd,
+          },
+          window,
+          source,
+          environment: kloudtrackConfig.environment,
+          stationCount: stations.length,
+        });
+
+        for (const [index, station] of stations.entries()) {
+          if (request.signal.aborted) break;
+
+          const result = await fetchStationBucket(
+            station,
+            metric,
+            selectedMetricKeys,
+            window,
+            useDemoData,
+            kloudtrackConfig,
+            metricRangeOverrides,
+          );
+          results.push(result);
+          send("result", {
+            result,
+            completedCount: results.length,
+            stationCount: stations.length,
+          });
+
+          if (index < stations.length - 1 && !request.signal.aborted) {
+            await sleep(requestGapMs);
+          }
+        }
+
+        send("done", {
+          stationCount: stations.length,
+          results,
+        });
+        controller.close();
+      } catch (error) {
+        send("error", {
+          message: error instanceof Error ? error.message : "Unknown pubmat quick fetch error",
+        });
+        controller.close();
+      } finally {
+        activeFetchKeys.delete(fetchKey);
+      }
+    },
+    cancel() {
+      activeFetchKeys.delete(fetchKey);
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "application/x-ndjson; charset=utf-8",
+      "Cache-Control": "no-store, no-transform",
+    },
+  });
+}
+
+function buildFetchKey(
+  environment: KloudtrackEnvironmentConfig["environment"],
+  metric: InvestigationMetricKey,
+  intervalMinutes: number,
+  window: BucketWindow,
+) {
+  return [
+    environment,
+    metric,
+    intervalMinutes,
+    window.bucketEnd,
+  ].join(":");
 }
 
 async function loadStations(

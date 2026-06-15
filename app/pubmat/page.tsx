@@ -34,7 +34,7 @@ function parseMetric(value?: string): InvestigationMetricKey {
   if (value === "all") return "all";
   return allMetricKeys.includes(value as MetricKey)
     ? value as InvestigationMetricKey
-    : "precipitation";
+    : "temperature";
 }
 
 function parseInterval(value?: string) {

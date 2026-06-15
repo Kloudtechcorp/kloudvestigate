@@ -23,6 +23,40 @@ const intervalOptions = [
   { label: "Daily", value: 1440 },
 ];
 
+const startedAutoRunKeys = new Set<string>();
+
+type PubmatStreamInitEvent = {
+  event: "init";
+  selection: PubmatQuickFetchResponse["selection"];
+  window: PubmatBucketWindow;
+  source: SourceKind;
+  stationCount: number;
+};
+
+type PubmatStreamResultEvent = {
+  event: "result";
+  result: PubmatQuickFetchResult;
+  completedCount: number;
+  stationCount: number;
+};
+
+type PubmatStreamDoneEvent = {
+  event: "done";
+  stationCount: number;
+  results: PubmatQuickFetchResult[];
+};
+
+type PubmatStreamErrorEvent = {
+  event: "error";
+  message: string;
+};
+
+type PubmatStreamEvent =
+  | PubmatStreamInitEvent
+  | PubmatStreamResultEvent
+  | PubmatStreamDoneEvent
+  | PubmatStreamErrorEvent;
+
 export function PubmatQuickFetch({
   autoRun = false,
   initialIntervalMinutes = 60,
@@ -45,6 +79,8 @@ export function PubmatQuickFetch({
   const [intervalMinutes, setIntervalMinutes] = useState(initialIntervalMinutes);
   const [requestGapMs, setRequestGapMs] = useState(600);
   const [results, setResults] = useState<PubmatQuickFetchResult[]>([]);
+  const [stationCount, setStationCount] = useState(0);
+  const [completedCount, setCompletedCount] = useState(0);
   const [responseWindow, setResponseWindow] = useState<PubmatBucketWindow | null>(null);
   const [source, setSource] = useState<SourceKind | null>(null);
   const [running, setRunning] = useState(false);
@@ -64,12 +100,17 @@ export function PubmatQuickFetch({
   const window = responseWindow ?? previewWindow;
   const safeGapMs = Math.max(requestGapMs || 0, 350);
   const rateLabel = `${(1000 / safeGapMs).toFixed(1)} req/sec`;
-  const progressPercent = results.length ? 100 : running ? 35 : 0;
+  const progressPercent = stationCount ? Math.round((completedCount / stationCount) * 100) : 0;
+  const autoRunKey = `${initialMetric}:${initialIntervalMinutes}:${autoRun ? "run" : "idle"}`;
 
   const runQuickFetch = useCallback(async () => {
+    if (abortControllerRef.current) return;
+
     setRunning(true);
     setError(null);
     setResults([]);
+    setStationCount(0);
+    setCompletedCount(0);
     setResponseWindow(null);
     setSource(null);
     setCopyState("idle");
@@ -81,7 +122,10 @@ export function PubmatQuickFetch({
     try {
       const response = await fetch("/api/pubmat-quick-fetch", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Accept": "application/x-ndjson",
+          "Content-Type": "application/json",
+        },
         body: JSON.stringify({
           metric,
           timestamp,
@@ -96,11 +140,53 @@ export function PubmatQuickFetch({
         throw new Error(errorPayload ?? `Pubmat quick fetch failed (${response.status})`);
       }
 
+      if (response.headers.get("content-type")?.includes("application/x-ndjson") && response.body) {
+        const streamedResults: PubmatQuickFetchResult[] = [];
+        let streamedPayload: Omit<PubmatQuickFetchResponse, "results"> | null = null;
+
+        await readPubmatStream(response, {
+          onInit(event) {
+            streamedPayload = {
+              selection: event.selection,
+              window: event.window,
+              source: event.source,
+              stationCount: event.stationCount,
+            };
+            setResponseWindow(event.window);
+            setSource(event.source);
+            setStationCount(event.stationCount);
+            setCompletedCount(0);
+          },
+          onResult(event) {
+            upsertStationResult(streamedResults, event.result);
+            setResults([...streamedResults]);
+            setCompletedCount(streamedResults.length);
+            setStationCount(event.stationCount);
+          },
+          onDone(event) {
+            const dedupedResults = dedupeStationResults(event.results);
+            setCompletedCount(dedupedResults.length);
+            setStationCount(event.stationCount);
+            if (streamedPayload) {
+              onDataChange?.({
+                ...streamedPayload,
+                stationCount: event.stationCount,
+                results: dedupedResults,
+              });
+            }
+          },
+        });
+        return;
+      }
+
       const payload = (await response.json()) as PubmatQuickFetchResponse;
-      setResults(payload.results);
+      const dedupedResults = dedupeStationResults(payload.results);
+      setResults(dedupedResults);
+      setStationCount(payload.stationCount);
+      setCompletedCount(dedupedResults.length);
       setResponseWindow(payload.window);
       setSource(payload.source);
-      onDataChange?.(payload);
+      onDataChange?.({ ...payload, results: dedupedResults });
     } catch (requestError) {
       if (controller.signal.aborted) {
         setError("Fetch stopped.");
@@ -115,10 +201,16 @@ export function PubmatQuickFetch({
 
   useEffect(() => {
     if (!autoRun || autoRunStartedRef.current) return;
+    if (startedAutoRunKeys.has(autoRunKey)) return;
 
+    startedAutoRunKeys.add(autoRunKey);
     autoRunStartedRef.current = true;
-    void runQuickFetch();
-  }, [autoRun, runQuickFetch]);
+    const timeoutId = globalThis.setTimeout(() => {
+      void runQuickFetch();
+    }, 0);
+
+    return () => globalThis.clearTimeout(timeoutId);
+  }, [autoRun, autoRunKey, runQuickFetch]);
 
   function stopQuickFetch() {
     abortControllerRef.current?.abort();
@@ -215,7 +307,7 @@ export function PubmatQuickFetch({
             <div className="h-full bg-accent" style={{ width: `${progressPercent}%` }} />
           </div>
           <div className="flex flex-wrap items-center gap-2 font-mono text-xs text-text-muted">
-            <span>{results.length} stations</span>
+            <span>{completedCount} / {stationCount || "?"} stations</span>
             <span>{rateLabel}</span>
             <span>{source ?? "queued"}</span>
           </div>
@@ -270,6 +362,73 @@ export function PubmatQuickFetch({
       )}
     </section>
   );
+}
+
+function upsertStationResult(results: PubmatQuickFetchResult[], result: PubmatQuickFetchResult) {
+  const existingIndex = results.findIndex((item) => item.station.id === result.station.id);
+  if (existingIndex >= 0) {
+    results[existingIndex] = result;
+    return;
+  }
+
+  results.push(result);
+}
+
+function dedupeStationResults(results: PubmatQuickFetchResult[]) {
+  const resultsByStationId = new Map<string, PubmatQuickFetchResult>();
+  for (const result of results) {
+    resultsByStationId.set(result.station.id, result);
+  }
+
+  return [...resultsByStationId.values()];
+}
+
+async function readPubmatStream(
+  response: Response,
+  handlers: {
+    onInit: (event: PubmatStreamInitEvent) => void;
+    onResult: (event: PubmatStreamResultEvent) => void;
+    onDone: (event: PubmatStreamDoneEvent) => void;
+  },
+) {
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error("Pubmat quick fetch did not return a readable stream.");
+
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  function processLine(line: string) {
+    if (!line.trim()) return;
+
+    const event = JSON.parse(line) as PubmatStreamEvent;
+    if (event.event === "init") {
+      handlers.onInit(event);
+      return;
+    }
+    if (event.event === "result") {
+      handlers.onResult(event);
+      return;
+    }
+    if (event.event === "done") {
+      handlers.onDone(event);
+      return;
+    }
+
+    throw new Error(event.message);
+  }
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+    for (const line of lines) processLine(line);
+  }
+
+  buffer += decoder.decode();
+  processLine(buffer);
 }
 
 function StatusChip({ status }: { status: PubmatQuickFetchStatus }) {
