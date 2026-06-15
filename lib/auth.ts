@@ -1,5 +1,5 @@
 export function assertInternalAccess(request: Request): Response | null {
-  if (process.env.NODE_ENV !== "production" && !process.env.INTERNAL_COPILOT_TOKEN) {
+  if (process.env.NODE_ENV !== "production") {
     return null;
   }
 

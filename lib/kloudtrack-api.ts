@@ -6,10 +6,16 @@ import type {
   TelemetryRecord,
 } from "./telemetry-types";
 import { allMetricKeys } from "./metric-profiles";
+import {
+  resolveKloudtrackEnvironmentConfig,
+  type KloudtrackEnvironment,
+  type KloudtrackEnvironmentConfig,
+} from "./kloudtrack-environment";
 
-const KLOUDTRACK_API_BASE_URL =
-  process.env.KLOUDTRACK_API_BASE_URL || "https://api.kloudtechsea.com/api/v1";
-const KLOUDTRACK_API_TOKEN = process.env.KLOUDTRACK_API_TOKEN;
+const KLOUDTRACK_REQUEST_TIMEOUT_MS = readPositiveNumber(
+  process.env.KLOUDTRACK_REQUEST_TIMEOUT_MS,
+  120_000,
+);
 
 interface KloudtrackApiResponse<T> {
   success: boolean;
@@ -36,7 +42,11 @@ class KloudtrackApiClient {
     }
 
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 10_000);
+    let timedOut = false;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, KLOUDTRACK_REQUEST_TIMEOUT_MS);
 
     try {
       const response = await fetch(`${this.baseURL}${endpoint}`, {
@@ -58,25 +68,29 @@ class KloudtrackApiClient {
         throw new Error(apiResponse.message || "Kloudtrack API request failed");
       }
       return apiResponse.data;
+    } catch (error) {
+      if (timedOut) {
+        throw new Error(
+          `KloudTrack API request timed out after ${formatTimeoutSeconds(KLOUDTRACK_REQUEST_TIMEOUT_MS)}.`,
+        );
+      }
+
+      throw error;
     } finally {
       clearTimeout(timeout);
     }
   }
 }
 
-export const kloudtrackApi = new KloudtrackApiClient(
-  KLOUDTRACK_API_BASE_URL,
-  KLOUDTRACK_API_TOKEN,
-);
-
 export async function getTelemetryMetricHistoryFromKloudtrackApi(
   stationId: string,
   parameter: MetricKey,
   params: Record<string, string>,
+  config: KloudtrackEnvironment | KloudtrackEnvironmentConfig = "live",
 ): Promise<TelemetryHistoryMetricRaw> {
   const queryString = new URLSearchParams(params).toString();
   const { path, responseKey } = resolveHistoryEndpoint(stationId, parameter);
-  const raw = await kloudtrackApi.get<TelemetryHistoryMetricRaw>(`${path}?${queryString}`);
+  const raw = await getKloudtrackApi(config).get<TelemetryHistoryMetricRaw>(`${path}?${queryString}`);
   return {
     ...raw,
     telemetry: raw.telemetry ?? raw[responseKey] ?? [],
@@ -86,13 +100,16 @@ export async function getTelemetryMetricHistoryFromKloudtrackApi(
 export async function getAllTelemetryHistoryFromKloudtrackApi(
   stationId: string,
   params: Record<string, string>,
+  config: KloudtrackEnvironment | KloudtrackEnvironmentConfig = "live",
 ): Promise<TelemetryHistoryMetricRaw> {
   const queryString = new URLSearchParams(params).toString();
-  return kloudtrackApi.get<TelemetryHistoryMetricRaw>(`/telemetry/station/${stationId}/history?${queryString}`);
+  return getKloudtrackApi(config).get<TelemetryHistoryMetricRaw>(`/telemetry/station/${stationId}/history?${queryString}`);
 }
 
-export async function getDashboardDataFromKloudtrackApi(): Promise<DashboardRaw> {
-  return kloudtrackApi.get<DashboardRaw>("/telemetry/dashboard");
+export async function getDashboardDataFromKloudtrackApi(
+  config: KloudtrackEnvironment | KloudtrackEnvironmentConfig = "live",
+): Promise<DashboardRaw> {
+  return getKloudtrackApi(config).get<DashboardRaw>("/telemetry/dashboard");
 }
 
 export function normalizeStation(station: StationRaw): StationMetadata {
@@ -183,4 +200,22 @@ function readMetricValue(
   if (metric === "windDirection") return record.wind?.direction ?? record.windDirection;
   if (metric === "windSpeed") return record.wind?.speed ?? record.windSpeed;
   return record[metric];
+}
+
+function readPositiveNumber(value: string | undefined, fallback: number) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function formatTimeoutSeconds(timeoutMs: number) {
+  const seconds = timeoutMs / 1000;
+  return Number.isInteger(seconds) ? `${seconds}s` : `${seconds.toFixed(1)}s`;
+}
+
+function getKloudtrackApi(config: KloudtrackEnvironment | KloudtrackEnvironmentConfig) {
+  const resolvedConfig = typeof config === "string"
+    ? resolveKloudtrackEnvironmentConfig(config)
+    : config;
+
+  return new KloudtrackApiClient(resolvedConfig.baseURL, resolvedConfig.apiToken);
 }

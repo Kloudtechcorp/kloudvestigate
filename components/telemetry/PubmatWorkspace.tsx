@@ -20,7 +20,7 @@ export function PubmatWorkspace({
   const [pubmatData, setPubmatData] = useState<PubmatQuickFetchResponse | null>(null);
 
   return (
-    <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_420px]">
+    <>
       <PubmatQuickFetch
         autoRun={autoRun}
         initialIntervalMinutes={initialIntervalMinutes}
@@ -29,6 +29,6 @@ export function PubmatWorkspace({
         onDataChange={setPubmatData}
       />
       <PubmatChatPanel data={pubmatData} />
-    </div>
+    </>
   );
 }

@@ -367,6 +367,46 @@ textarea {
   color: var(--card-foreground);
 }
 
+.env-switch {
+  display: inline-flex;
+  min-height: 38px;
+  min-width: 86px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border-radius: 6px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  padding: 8px 10px;
+  color: var(--card-foreground);
+  font-size: 0.82rem;
+  font-weight: 700;
+  transition: border-color 120ms ease, background 120ms ease, color 120ms ease;
+}
+
+.env-switch:hover {
+  border-color: var(--ring);
+  background: var(--surface-subtle);
+}
+
+.env-switch:disabled {
+  cursor: wait;
+  opacity: 0.68;
+}
+
+.env-switch-beta {
+  border-color: var(--warning-border);
+  background: var(--warning-surface);
+  color: var(--warning-foreground-strong);
+}
+
+.env-switch-dot {
+  height: 7px;
+  width: 7px;
+  border-radius: 999px;
+  background: var(--danger);
+}
+
 .nav-pill:hover,
 .question-button:hover,
 .icon-button:hover {

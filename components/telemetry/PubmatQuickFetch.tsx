@@ -91,12 +91,14 @@ export function PubmatQuickFetch({
           timestamp,
           intervalMinutes,
           requestGapMs: safeGapMs,
-          useDemoData: false,
         }),
         signal: controller.signal,
       });
 
-      if (!response.ok) throw new Error(`Pubmat quick fetch failed (${response.status})`);
+      if (!response.ok) {
+        const errorPayload = await readErrorPayload(response);
+        throw new Error(errorPayload ?? `Pubmat quick fetch failed (${response.status})`);
+      }
 
       const payload = (await response.json()) as PubmatQuickFetchResponse;
       setResults(payload.results);
@@ -317,4 +319,13 @@ function escapeTsv(value: string | number | undefined) {
 
 function formatValue(value?: number) {
   return value === undefined ? "-" : String(value.toFixed(2));
+}
+
+async function readErrorPayload(response: Response) {
+  try {
+    const payload = await response.json() as { error?: string; message?: string };
+    return payload.message ?? payload.error ?? null;
+  } catch {
+    return null;
+  }
 }

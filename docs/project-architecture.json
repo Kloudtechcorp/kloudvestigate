@@ -3,7 +3,7 @@
     "name": "kloudvestigate",
     "purpose": "Internal telemetry investigation and publication-material preparation tool for KloudTrack station data.",
     "framework": "Next.js 16.2.6 App Router with React 19.2.4 and TypeScript.",
-    "tokenSavingSummary": "Use this file as the compact project map for future model work. The app has server-rendered App Router pages, small client islands for dashboards and Mermaid rendering, route-handler APIs as the backend-for-frontend layer, server-only KloudTrack and Gemini calls, deterministic telemetry analysis before AI explanation, Prisma schema for future persistence, and demo data fallback when upstream tokens are missing."
+    "tokenSavingSummary": "Use this file as the compact project map for future model work. The app has server-rendered App Router pages, small client islands for dashboards and Mermaid rendering, route-handler APIs as the backend-for-frontend layer, server-only KloudTrack and Gemini calls, deterministic telemetry analysis before AI explanation, and demo data fallback when upstream tokens are missing."
   },
   "runtime": {
     "client": [
@@ -40,11 +40,6 @@
       "name": "AI context and providers",
       "paths": ["lib/ai-context.ts", "lib/gemini.ts", "app/api/pubmat-chat/route.ts"],
       "responsibility": "Builds compact JSON prompts, provides deterministic fallback explanations, and calls Gemini only from server routes."
-    },
-    {
-      "name": "Persistence design",
-      "paths": ["prisma/schema.prisma", "generated/prisma/*"],
-      "responsibility": "Defines users, stations, investigation records, aggregation cache, audit logs, roles, and investigation status for PostgreSQL-backed persistence."
     }
   ],
   "security": [
@@ -84,28 +79,6 @@
       "mermaid": "sequenceDiagram\n  participant Operator\n  participant Client\n  participant API as Route Handler\n  participant Analysis as Deterministic Analysis\n  participant Context as AI Context Builder\n  participant Model as Gemini or Fallback\n  Operator->>Client: Ask investigation question\n  Client->>API: Send selection and question\n  API->>Analysis: Analyze normalized records\n  Analysis->>Context: Summaries, events, intervals, warnings\n  Context->>Model: Compact prompt without raw minute arrays\n  Model-->>API: Answer grounded in supplied context\n  API-->>Client: JSON answer and analysis payload"
     }
   ],
-  "database": [
-    {
-      "model": "User",
-      "notes": "Operator identity and role for future auth and audit ownership."
-    },
-    {
-      "model": "Station",
-      "notes": "Station metadata snapshot keyed by externalId."
-    },
-    {
-      "model": "TelemetryInvestigation",
-      "notes": "Stored investigation question, answer, prompt, compact context, token estimate, and status."
-    },
-    {
-      "model": "AggregationCache",
-      "notes": "Reusable interval summaries for station, metric, range, and interval combinations."
-    },
-    {
-      "model": "AuditLog",
-      "notes": "Structured audit trail for investigation and access events."
-    }
-  ],
   "environment": [
     "KLOUDTRACK_API_BASE_URL defaults to https://api.kloudtechsea.com/api/v1.",
     "KLOUDTRACK_API_TOKEN enables real upstream telemetry; absence uses demo data in current flows.",
@@ -115,10 +88,6 @@
     "GEMINI_MAX_OUTPUT_TOKENS defaults to 2400."
   ],
   "futureWork": [
-    "Move writeAuditEvent from console logging into the Prisma AuditLog model.",
-    "Persist completed investigations and compact contexts in TelemetryInvestigation.",
-    "Add BullMQ workers for scheduled aggregation, anomaly review, and report generation.",
-    "Back aggregation cache reads and writes with PostgreSQL and Redis where appropriate.",
     "Add automated tests around metric endpoint resolution, bucket windows, and prompt compaction."
   ]
 }

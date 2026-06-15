@@ -4,29 +4,5 @@ services:
     ports:
       - "3000:3000"
     environment:
-      DATABASE_URL: postgres://postgres:postgres@postgres:5432/kloud_copilot
-      REDIS_URL: redis://redis:6379
       KLOUDTRACK_API_BASE_URL: https://api.kloudtechsea.com/api/v1
       INTERNAL_COPILOT_TOKEN: change-me
-    depends_on:
-      - postgres
-      - redis
-
-  postgres:
-    image: postgres:16-alpine
-    environment:
-      POSTGRES_DB: kloud_copilot
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres-data:/var/lib/postgresql/data
-
-  redis:
-    image: redis:7-alpine
-    ports:
-      - "6379:6379"
-
-volumes:
-  postgres-data:

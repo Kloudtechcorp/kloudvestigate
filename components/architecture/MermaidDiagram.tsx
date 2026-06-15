@@ -8,20 +8,18 @@ type MermaidDiagramProps = {
   title: string;
 };
 
-mermaid.initialize({
-  startOnLoad: false,
-  securityLevel: "strict",
-  theme: "base",
-  themeVariables: {
-    primaryColor: "var(--mermaid-primary)",
-    primaryTextColor: "var(--foreground)",
-    primaryBorderColor: "var(--mermaid-primary-border)",
-    lineColor: "var(--mermaid-line)",
-    secondaryColor: "var(--mermaid-secondary)",
-    tertiaryColor: "var(--surface)",
-    fontFamily: "Arial, Helvetica, sans-serif"
-  }
-});
+const mermaidColorFallbacks = {
+  "--mermaid-primary": "#fff7cc",
+  "--foreground": "#242424",
+  "--mermaid-primary-border": "#d1ae05",
+  "--mermaid-line": "#686868",
+  "--mermaid-secondary": "#f4f1df",
+  "--surface": "#ffffff"
+} as const;
+
+function getMermaidColor(colorName: keyof typeof mermaidColorFallbacks) {
+  return getComputedStyle(document.documentElement).getPropertyValue(colorName).trim() || mermaidColorFallbacks[colorName];
+}
 
 export function MermaidDiagram({ chart, title }: MermaidDiagramProps) {
   const reactId = useId();
@@ -34,6 +32,21 @@ export function MermaidDiagram({ chart, title }: MermaidDiagramProps) {
 
     async function renderDiagram() {
       try {
+        mermaid.initialize({
+          startOnLoad: false,
+          securityLevel: "strict",
+          theme: "base",
+          themeVariables: {
+            primaryColor: getMermaidColor("--mermaid-primary"),
+            primaryTextColor: getMermaidColor("--foreground"),
+            primaryBorderColor: getMermaidColor("--mermaid-primary-border"),
+            lineColor: getMermaidColor("--mermaid-line"),
+            secondaryColor: getMermaidColor("--mermaid-secondary"),
+            tertiaryColor: getMermaidColor("--surface"),
+            fontFamily: "Arial, Helvetica, sans-serif"
+          }
+        });
+
         const result = await mermaid.render(diagramId, chart);
         if (!cancelled) {
           setSvg(result.svg);

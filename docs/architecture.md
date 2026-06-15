@@ -24,16 +24,6 @@ component.
 
 The root `monitorConstant.ts` file documents the upstream API contract and is supported by a local `Endpoint` type so it remains compile-safe.
 
-## Queue Strategy
-
-BullMQ workers can be added for:
-
-- hourly aggregation cache refresh
-- anomaly analysis
-- scheduled operational summaries
-- AI incident report generation
-- dead-letter handling for failed upstream API calls
-
 ## Token Strategy
 
 Raw minute arrays are omitted from AI prompts. Context contains interval summaries, significant readings, warning crossings, spikes, missing periods, duplicate timestamps, flatlines, and token estimates.

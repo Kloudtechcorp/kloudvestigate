@@ -16,7 +16,7 @@ import { phtDayBoundaryToUtcISOString, philippineInputToUtcISOString, toInputVal
 import { useInvestigationQuickActionStore } from "./telemetry/useInvestigationQuickActionStore";
 
 const QUICK_ACTION_REQUEST_GAP_MS = 350;
-const QUICK_ACTION_REQUEST_TIMEOUT_MS = 45_000;
+const QUICK_ACTION_REQUEST_TIMEOUT_MS = 300_000;
 
 export function TelemetryInvestigationDashboard() {
   const [stationId, setStationId] = useState("station-001");
@@ -45,6 +45,11 @@ export function TelemetryInvestigationDashboard() {
   const [manualDataStationId, setManualDataStationId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [batchCustomScopeEnabled, setBatchCustomScopeEnabled] = useState(false);
+  const [batchStart, setBatchStart] = useState(() => buildYesterdayFullDayInputRange().start);
+  const [batchEnd, setBatchEnd] = useState(() => buildYesterdayFullDayInputRange().end);
+  const [batchAggregationMinutes, setBatchAggregationMinutes] = useState(1);
+  const [batchStationIds, setBatchStationIds] = useState<string[] | null>(null);
   const quickActionStatus = useInvestigationQuickActionStore((state) => state.status);
   const quickActionCompletedStations = useInvestigationQuickActionStore((state) => state.completedStations);
   const quickActionTotalStations = useInvestigationQuickActionStore((state) => state.totalStations);
@@ -97,6 +102,7 @@ export function TelemetryInvestigationDashboard() {
         if (!response.ok) throw new Error(`Station list request failed (${response.status})`);
         const payload = (await response.json()) as StationsResponse;
         setStations(payload.stations);
+        setBatchStationIds((current) => reconcileSelectedStationIds(current, payload.stations));
         setStationSource(payload.source);
         const firstStationId = payload.stations[0]?.id ?? stationId;
         if (firstStationId !== stationId) setStationId(firstStationId);
@@ -153,24 +159,38 @@ export function TelemetryInvestigationDashboard() {
   }
 
   async function runInvestigateEveryStation() {
-    if (quickActionRunning || loading || !stations.length) return;
+    const selectedBatchStationIds = batchStationIds ?? stations.map((station) => station.id);
+    const selectedBatchStations = stations.filter((station) => selectedBatchStationIds.includes(station.id));
+    if (quickActionRunning || loading || !selectedBatchStations.length) return;
 
     const populatedResults = quickActionResultsByStationId;
-    const hasPopulatedResults = Object.keys(populatedResults).length > 0;
+    const hasPopulatedResults = !batchCustomScopeEnabled
+      && selectedBatchStations.some((station) => populatedResults[station.id]);
     const skipPopulatedStations = hasPopulatedResults
       ? window.confirm("There is already populated investigation data. Skip stations that already have data?")
       : false;
-    const initialResults = skipPopulatedStations ? populatedResults : {};
+    const initialResults = skipPopulatedStations
+      ? Object.fromEntries(
+        selectedBatchStations
+          .filter((station) => populatedResults[station.id])
+          .map((station) => [station.id, populatedResults[station.id]]),
+      )
+      : {};
 
     setError(null);
     if (!skipPopulatedStations) resetQuickAction();
     setManualDataStationId(null);
     setData(null);
-    beginQuickAction(stations.length, initialResults);
+    beginQuickAction(selectedBatchStations.length, initialResults);
 
-    const { start, end } = buildYesterdayFullDayRange();
+    const batchScope = buildBatchInvestigationScope({
+      customScopeEnabled: batchCustomScopeEnabled,
+      customStart: batchStart,
+      customEnd: batchEnd,
+      customAggregationMinutes: batchAggregationMinutes,
+    });
 
-    for (const [index, station] of stations.entries()) {
+    for (const [index, station] of selectedBatchStations.entries()) {
       setQuickActionStation(station.id, index);
       setStationId(station.id);
 
@@ -190,10 +210,10 @@ export function TelemetryInvestigationDashboard() {
             body: JSON.stringify({
               stationId: station.id,
               metric: "all",
-              aggregationMinutes: 1,
-              start,
-              end,
-              question: "Summarize every metric for yesterday's full day.",
+              aggregationMinutes: batchScope.aggregationMinutes,
+              start: batchScope.start,
+              end: batchScope.end,
+              question: batchScope.question,
               askCopilot: false,
               useDemoData: false,
             }),
@@ -213,7 +233,7 @@ export function TelemetryInvestigationDashboard() {
         setQuickActionStation(station.id, index + 1);
       }
 
-      if (index < stations.length - 1) {
+      if (index < selectedBatchStations.length - 1) {
         await wait(QUICK_ACTION_REQUEST_GAP_MS);
       }
     }
@@ -247,6 +267,16 @@ export function TelemetryInvestigationDashboard() {
           quickActionBusy={quickActionRunning}
           quickActionProgress={`${quickActionCompletedStations}/${quickActionTotalStations}`}
           quickActionResultsByStationId={quickActionStatus !== "idle" ? quickActionResultsByStationId : undefined}
+          batchCustomScopeEnabled={batchCustomScopeEnabled}
+          batchStart={batchStart}
+          batchEnd={batchEnd}
+          batchAggregationMinutes={batchAggregationMinutes}
+          batchStationIds={batchStationIds}
+          onBatchStationIdsChange={setBatchStationIds}
+          onBatchCustomScopeEnabledChange={setBatchCustomScopeEnabled}
+          onBatchStartChange={setBatchStart}
+          onBatchEndChange={setBatchEnd}
+          onBatchAggregationChange={setBatchAggregationMinutes}
         />
 
         <section className="grid min-w-0 gap-4">
@@ -270,6 +300,7 @@ export function TelemetryInvestigationDashboard() {
             <TelemetryTimeline
               analysis={displayedData?.analysis}
               metricAnalyses={displayedData?.metricAnalyses}
+              aggregationMinutes={displayedData?.selection.aggregationMinutes}
               sourceLabel={sourceLabel}
             />
             <EventsPanel analysis={displayedData?.analysis} metricAnalyses={displayedData?.metricAnalyses} />
@@ -298,6 +329,50 @@ function buildYesterdayFullDayRange() {
   return {
     start: phtDayBoundaryToUtcISOString(-1),
     end: phtDayBoundaryToUtcISOString(0),
+  };
+}
+
+function buildYesterdayFullDayInputRange() {
+  return {
+    start: toInputValue(new Date(phtDayBoundaryToUtcISOString(-1))),
+    end: toInputValue(new Date(phtDayBoundaryToUtcISOString(0))),
+  };
+}
+
+function reconcileSelectedStationIds(current: string[] | null, stations: StationMetadata[]) {
+  const stationIds = stations.map((station) => station.id);
+  if (!current) return stationIds;
+
+  const stationIdSet = new Set(stationIds);
+  const next = current.filter((stationId) => stationIdSet.has(stationId));
+
+  return next;
+}
+
+function buildBatchInvestigationScope({
+  customScopeEnabled,
+  customStart,
+  customEnd,
+  customAggregationMinutes,
+}: {
+  customScopeEnabled: boolean;
+  customStart: string;
+  customEnd: string;
+  customAggregationMinutes: number;
+}) {
+  if (!customScopeEnabled) {
+    return {
+      ...buildYesterdayFullDayRange(),
+      aggregationMinutes: 1,
+      question: "Summarize every metric for yesterday's full day.",
+    };
+  }
+
+  return {
+    start: philippineInputToUtcISOString(customStart),
+    end: philippineInputToUtcISOString(customEnd),
+    aggregationMinutes: customAggregationMinutes,
+    question: "Summarize every metric for the selected custom batch range.",
   };
 }
 

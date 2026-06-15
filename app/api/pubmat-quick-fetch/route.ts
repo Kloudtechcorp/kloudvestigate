@@ -7,6 +7,10 @@ import {
   normalizeDashboardStations,
   normalizeTelemetry,
 } from "@/lib/kloudtrack-api";
+import {
+  resolveKloudtrackConfigFromRequest,
+  type KloudtrackEnvironmentConfig,
+} from "@/lib/kloudtrack-environment";
 import { readMetricRangeOverridesFromCookies } from "@/lib/metric-range-config.server";
 import { allMetricKeys, getMetricAnalysisProfile } from "@/lib/metric-profiles";
 import { createDemoTelemetry, demoStations } from "@/lib/mock-telemetry";
@@ -20,6 +24,7 @@ import type {
 } from "@/lib/telemetry-types";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 300;
 
 type QuickFetchStatus = "ready" | "attention" | "missing" | "failed";
 
@@ -46,14 +51,15 @@ export async function POST(request: Request) {
 
   try {
     const metricRangeOverrides = await readMetricRangeOverridesFromCookies();
+    const kloudtrackConfig = resolveKloudtrackConfigFromRequest(request);
     const body = (await request.json()) as PubmatQuickFetchBody;
     const metric = body.metric && validMetrics.includes(body.metric) ? body.metric : "precipitation";
     const intervalMinutes = clampInterval(body.intervalMinutes);
     const requestGapMs = Math.max(body.requestGapMs ?? 600, 350);
-    const useDemoData = body.useDemoData ?? !process.env.KLOUDTRACK_API_TOKEN;
+    const useDemoData = body.useDemoData || !kloudtrackConfig.apiToken;
     const window = buildBucketWindow(body.timestamp, intervalMinutes);
     const selectedMetricKeys = metric === "all" ? allMetricKeys : [metric];
-    const stations = await loadStations(useDemoData);
+    const stations = await loadStations(useDemoData, kloudtrackConfig);
     const results = [];
 
     for (const [index, station] of stations.entries()) {
@@ -65,6 +71,7 @@ export async function POST(request: Request) {
         selectedMetricKeys,
         window,
         useDemoData,
+        kloudtrackConfig,
         metricRangeOverrides,
       ));
 
@@ -83,6 +90,7 @@ export async function POST(request: Request) {
       },
       window,
       source: useDemoData ? "demo" : "kloudtrack",
+      environment: kloudtrackConfig.environment,
       stationCount: stations.length,
       results,
     });
@@ -97,10 +105,13 @@ export async function POST(request: Request) {
   }
 }
 
-async function loadStations(useDemoData: boolean): Promise<StationMetadata[]> {
+async function loadStations(
+  useDemoData: boolean,
+  kloudtrackConfig: KloudtrackEnvironmentConfig,
+): Promise<StationMetadata[]> {
   if (useDemoData) return demoStations;
 
-  const dashboard = await getDashboardDataFromKloudtrackApi();
+  const dashboard = await getDashboardDataFromKloudtrackApi(kloudtrackConfig);
   return normalizeDashboardStations(dashboard);
 }
 
@@ -110,10 +121,11 @@ async function fetchStationBucket(
   selectedMetricKeys: MetricKey[],
   window: BucketWindow,
   useDemoData: boolean,
+  kloudtrackConfig: KloudtrackEnvironmentConfig,
   metricRangeOverrides: Record<string, { minimum: number; maximum: number }>,
 ) {
   try {
-    const source = await loadTelemetryForStation(station, metric, window, useDemoData);
+    const source = await loadTelemetryForStation(station, metric, window, useDemoData, kloudtrackConfig);
     const values: Partial<Record<MetricKey, number>> = {};
     const classifications = new Set<string>();
 
@@ -159,8 +171,9 @@ async function loadTelemetryForStation(
   metric: InvestigationMetricKey,
   window: BucketWindow,
   useDemoData: boolean,
+  kloudtrackConfig: KloudtrackEnvironmentConfig,
 ): Promise<{ station: StationMetadata; series: Array<{ metric: MetricKey; records: TelemetryRecord[] }> }> {
-  if (metric === "all") return loadAllTelemetryForStation(station, window, useDemoData);
+  if (metric === "all") return loadAllTelemetryForStation(station, window, useDemoData, kloudtrackConfig);
 
   if (useDemoData) {
     const demo = createDemoTelemetry(station.id, metric, window.fetchStart, window.fetchEnd);
@@ -179,11 +192,10 @@ async function loadTelemetryForStation(
 
   const raw = await getTelemetryMetricHistoryFromKloudtrackApi(station.id, metric, {
     skip: "0",
-    take: "2000",
     interval: minutesBetween(window.bucketStart, window.bucketEnd).toString(),
     startDate: window.fetchStart,
     endDate: window.fetchEnd,
-  });
+  }, kloudtrackConfig);
   const normalized = normalizeTelemetry(raw);
 
   return {
@@ -196,6 +208,7 @@ async function loadAllTelemetryForStation(
   station: StationMetadata,
   window: BucketWindow,
   useDemoData: boolean,
+  kloudtrackConfig: KloudtrackEnvironmentConfig,
 ) {
   if (useDemoData) {
     const demoSeries = allMetricKeys.map((metric) => {
@@ -219,11 +232,10 @@ async function loadAllTelemetryForStation(
 
   const raw = await getAllTelemetryHistoryFromKloudtrackApi(station.id, {
     skip: "0",
-    take: "2000",
     interval: minutesBetween(window.bucketStart, window.bucketEnd).toString(),
     startDate: window.fetchStart,
     endDate: window.fetchEnd,
-  });
+  }, kloudtrackConfig);
 
   return normalizeAllTelemetry(raw);
 }

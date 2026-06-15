@@ -56,19 +56,7 @@ export default function ArchitecturePage() {
           </div>
         </section>
 
-        <section className="mt-4 grid gap-4 lg:grid-cols-2">
-          <div className="panel">
-            <h2 className="panel-title">Database Schema</h2>
-            <div className="mt-4 grid gap-3">
-              {data.database.map((model) => (
-                <div className="rounded border border-border-subtle bg-surface p-3" key={model.model}>
-                  <h3 className="font-mono text-sm font-semibold text-heading">{model.model}</h3>
-                  <p className="mt-1 text-sm leading-6 text-body-copy">{model.notes}</p>
-                </div>
-              ))}
-            </div>
-          </div>
-
+        <section className="mt-4 grid gap-4">
           <div className="panel">
             <h2 className="panel-title">Future Work</h2>
             <ul className="mt-3 grid gap-2 text-sm leading-6 text-body-copy">

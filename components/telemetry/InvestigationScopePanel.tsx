@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useSyncExternalStore } from "react";
 import type { InvestigationMetricKey, StationMetadata } from "@/lib/telemetry-types";
 import type { InvestigationResponse, MetricOption } from "./types";
 
@@ -31,6 +32,16 @@ export function InvestigationScopePanel({
   quickActionBusy,
   quickActionProgress,
   quickActionResultsByStationId = {},
+  batchCustomScopeEnabled = false,
+  batchStart,
+  batchEnd,
+  batchAggregationMinutes = 1,
+  batchStationIds = null,
+  onBatchStationIdsChange,
+  onBatchCustomScopeEnabledChange,
+  onBatchStartChange,
+  onBatchEndChange,
+  onBatchAggregationChange,
 }: {
   stations: StationMetadata[];
   stationId: string;
@@ -51,8 +62,19 @@ export function InvestigationScopePanel({
   quickActionBusy?: boolean;
   quickActionProgress?: string;
   quickActionResultsByStationId?: Record<string, InvestigationResponse>;
+  batchCustomScopeEnabled?: boolean;
+  batchStart?: string;
+  batchEnd?: string;
+  batchAggregationMinutes?: number;
+  batchStationIds?: string[] | null;
+  onBatchStationIdsChange?: (value: string[] | null) => void;
+  onBatchCustomScopeEnabledChange?: (value: boolean) => void;
+  onBatchStartChange?: (value: string) => void;
+  onBatchEndChange?: (value: string) => void;
+  onBatchAggregationChange?: (value: number) => void;
 }) {
   const hasQuickActionResults = quickActionBusy || Object.keys(quickActionResultsByStationId).length > 0;
+  const batchControlsMounted = useHydrated();
 
   return (
     <aside className="panel h-fit lg:sticky lg:top-5">
@@ -103,16 +125,30 @@ export function InvestigationScopePanel({
       </button>
       <QuickCommandsSection />
       {onQuickInvestigateEveryStation ? (
-        <StationBatchSection
-          stations={stations}
-          stationId={stationId}
-          onStationChange={onStationChange}
-          onQuickInvestigateEveryStation={onQuickInvestigateEveryStation}
-          quickActionBusy={quickActionBusy}
-          quickActionProgress={quickActionProgress}
-          quickActionResultsByStationId={quickActionResultsByStationId}
-          hasQuickActionResults={hasQuickActionResults}
-        />
+        batchControlsMounted ? (
+          <StationBatchSection
+            stations={stations}
+            stationId={stationId}
+            onStationChange={onStationChange}
+            onQuickInvestigateEveryStation={onQuickInvestigateEveryStation}
+            quickActionBusy={quickActionBusy}
+            quickActionProgress={quickActionProgress}
+            quickActionResultsByStationId={quickActionResultsByStationId}
+            hasQuickActionResults={hasQuickActionResults}
+            customScopeEnabled={batchCustomScopeEnabled}
+            customStart={batchStart}
+            customEnd={batchEnd}
+            customAggregationMinutes={batchAggregationMinutes}
+            selectedStationIds={batchStationIds}
+            onSelectedStationIdsChange={onBatchStationIdsChange}
+            onCustomScopeEnabledChange={onBatchCustomScopeEnabledChange}
+            onCustomStartChange={onBatchStartChange}
+            onCustomEndChange={onBatchEndChange}
+            onCustomAggregationChange={onBatchAggregationChange}
+          />
+        ) : (
+          <StationBatchPlaceholder />
+        )
       ) : null}
     </aside>
   );
@@ -133,6 +169,29 @@ function QuickCommandsSection() {
   );
 }
 
+function useHydrated() {
+  return useSyncExternalStore(
+    () => () => {},
+    () => true,
+    () => false,
+  );
+}
+
+function StationBatchPlaceholder() {
+  return (
+    <div className="mt-4 border-t border-border-subtle pt-4">
+      <p className="text-xs font-semibold uppercase tracking-[0.14em] text-label">Station batch</p>
+      <div className="mt-3 rounded-[6px] border border-border-subtle bg-surface p-3">
+        <p className="text-sm font-semibold text-card-foreground">Batch stations</p>
+        <p className="mt-2 text-xs leading-5 text-label">Loading station selection</p>
+      </div>
+      <button className="primary-action mt-3 w-full" type="button" disabled>
+        Loading batch controls
+      </button>
+    </div>
+  );
+}
+
 function StationBatchSection({
   stations,
   stationId,
@@ -142,6 +201,16 @@ function StationBatchSection({
   quickActionProgress,
   quickActionResultsByStationId,
   hasQuickActionResults,
+  customScopeEnabled,
+  customStart,
+  customEnd,
+  customAggregationMinutes,
+  selectedStationIds,
+  onSelectedStationIdsChange,
+  onCustomScopeEnabledChange,
+  onCustomStartChange,
+  onCustomEndChange,
+  onCustomAggregationChange,
 }: {
   stations: StationMetadata[];
   stationId: string;
@@ -151,20 +220,152 @@ function StationBatchSection({
   quickActionProgress?: string;
   quickActionResultsByStationId: Record<string, InvestigationResponse>;
   hasQuickActionResults: boolean;
+  customScopeEnabled: boolean;
+  customStart?: string;
+  customEnd?: string;
+  customAggregationMinutes: number;
+  selectedStationIds: string[] | null;
+  onSelectedStationIdsChange?: (value: string[] | null) => void;
+  onCustomScopeEnabledChange?: (value: boolean) => void;
+  onCustomStartChange?: (value: string) => void;
+  onCustomEndChange?: (value: string) => void;
+  onCustomAggregationChange?: (value: number) => void;
 }) {
+  const canEditCustomScope =
+    Boolean(onCustomScopeEnabledChange && onCustomStartChange && onCustomEndChange && onCustomAggregationChange);
+  const allStationIds = stations.map((station) => station.id);
+  const effectiveSelectedStationIds = selectedStationIds ?? allStationIds;
+  const selectedStationIdSet = new Set(effectiveSelectedStationIds);
+  const selectedCount = stations.filter((station) => selectedStationIdSet.has(station.id)).length;
+  const batchDisabled = quickActionBusy || selectedCount === 0;
+
+  function updateSelectedStation(stationId: string, selected: boolean) {
+    if (!onSelectedStationIdsChange) return;
+
+    const nextIds = selected
+      ? [...effectiveSelectedStationIds, stationId]
+      : effectiveSelectedStationIds.filter((id) => id !== stationId);
+
+    onSelectedStationIdsChange([...new Set(nextIds)].filter((id) => allStationIds.includes(id)));
+  }
+
   return (
     <div className="mt-4 border-t border-border-subtle pt-4">
       <p className="text-xs font-semibold uppercase tracking-[0.14em] text-label">Station batch</p>
+      {onSelectedStationIdsChange ? (
+        <div className="mt-3 rounded-[6px] border border-border-subtle bg-surface p-3">
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-sm font-semibold text-card-foreground">Batch stations</p>
+            <span className="text-xs text-label">{selectedCount}/{stations.length}</span>
+          </div>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button
+              className="nav-pill min-h-8 px-2 py-1 text-xs"
+              type="button"
+              onClick={() => onSelectedStationIdsChange(allStationIds)}
+            >
+              Select all
+            </button>
+            <button
+              className="nav-pill min-h-8 px-2 py-1 text-xs"
+              type="button"
+              onClick={() => onSelectedStationIdsChange(stationId ? [stationId] : [])}
+            >
+              Current only
+            </button>
+            <button
+              className="nav-pill min-h-8 px-2 py-1 text-xs"
+              type="button"
+              onClick={() => onSelectedStationIdsChange([])}
+            >
+              Clear
+            </button>
+          </div>
+          <div className="mt-3 max-h-56 overflow-auto rounded-[6px] border border-border-faint bg-surface-muted">
+            {stations.length ? stations.map((station) => (
+              <label
+                className="flex min-h-11 items-center gap-3 border-b border-border-faint px-3 py-2 text-sm last:border-b-0"
+                key={station.id}
+              >
+                <input
+                  className="h-4 w-4 accent-primary"
+                  type="checkbox"
+                  checked={selectedStationIdSet.has(station.id)}
+                  onChange={(event) => updateSelectedStation(station.id, event.target.checked)}
+                />
+                <span className="min-w-0 truncate text-card-foreground">{station.name}</span>
+              </label>
+            )) : (
+              <p className="px-3 py-2 text-sm text-label">Loading stations</p>
+            )}
+          </div>
+        </div>
+      ) : null}
+      {canEditCustomScope ? (
+        <div className="mt-3 rounded-[6px] border border-border-subtle bg-surface p-3">
+          <label className="flex items-center justify-between gap-3 text-sm font-medium text-card-foreground">
+            <span>Custom batch scope</span>
+            <input
+              className="h-4 w-4 accent-primary"
+              type="checkbox"
+              checked={customScopeEnabled}
+              onChange={(event) => onCustomScopeEnabledChange?.(event.target.checked)}
+            />
+          </label>
+          {customScopeEnabled ? (
+            <div className="mt-3 grid gap-3">
+              <label className="field-label">
+                Batch start (PH)
+                <input
+                  className="field"
+                  type="datetime-local"
+                  value={customStart ?? ""}
+                  onChange={(event) => onCustomStartChange?.(event.target.value)}
+                />
+              </label>
+              <label className="field-label">
+                Batch end (PH)
+                <input
+                  className="field"
+                  type="datetime-local"
+                  value={customEnd ?? ""}
+                  onChange={(event) => onCustomEndChange?.(event.target.value)}
+                />
+              </label>
+              <label className="field-label">
+                Batch interval
+                <select
+                  className="field"
+                  value={customAggregationMinutes}
+                  onChange={(event) => onCustomAggregationChange?.(Number(event.target.value))}
+                >
+                  <option value={1}>1 minute</option>
+                  <option value={15}>15 minutes</option>
+                  <option value={30}>30 minutes</option>
+                  <option value={60}>1 hour</option>
+                  <option value={360}>6 hours</option>
+                  <option value={720}>12 hours</option>
+                  <option value={1440}>Daily</option>
+                </select>
+              </label>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
       <button
         className="primary-action mt-3 w-full"
         type="button"
         onClick={onQuickInvestigateEveryStation}
-        disabled={quickActionBusy}
+        disabled={batchDisabled}
       >
-        {quickActionBusy ? `Investigating every station${quickActionProgress ? ` (${quickActionProgress})` : ""}` : "Investigate every station"}
+        {quickActionBusy
+          ? `Investigating selected stations${quickActionProgress ? ` (${quickActionProgress})` : ""}`
+          : `Investigate selected stations (${selectedCount})`}
       </button>
       <p className="mt-2 text-xs leading-5 text-label">
-        Yesterday, full day, all metrics, 1-minute aggregation, throttled to 3 requests per second.
+        {customScopeEnabled
+          ? "Custom range, all metrics, selected interval, selected stations only, throttled to 3 requests per second."
+          : "Yesterday, full day, all metrics, 1-minute aggregation, selected stations only, throttled to 3 requests per second."}
       </p>
       {hasQuickActionResults ? (
         <StationBatchSummary

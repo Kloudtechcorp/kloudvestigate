@@ -13,6 +13,10 @@ import {
   normalizeAllTelemetry,
   normalizeTelemetry,
 } from "@/lib/kloudtrack-api";
+import {
+  resolveKloudtrackConfigFromRequest,
+  type KloudtrackEnvironmentConfig,
+} from "@/lib/kloudtrack-environment";
 import { readMetricRangeOverridesFromCookies } from "@/lib/metric-range-config.server";
 import { allMetricKeys, getMetricAnalysisProfile } from "@/lib/metric-profiles";
 import { createDemoTelemetry } from "@/lib/mock-telemetry";
@@ -27,6 +31,7 @@ import type {
 } from "@/lib/telemetry-types";
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 300;
 
 const validMetrics: InvestigationMetricKey[] = [
   "all",
@@ -47,6 +52,7 @@ export async function GET(request: Request) {
 
   try {
     const metricRangeOverrides = await readMetricRangeOverridesFromCookies();
+    const kloudtrackConfig = resolveKloudtrackConfigFromRequest(request);
     const url = new URL(request.url);
     const stationIds = (url.searchParams.get("stationIds") ?? "")
       .split(",")
@@ -70,7 +76,7 @@ export async function GET(request: Request) {
         end: selection.end,
         aggregationMinutes: selection.aggregationMinutes,
       },
-      variant: JSON.stringify(metricRangeOverrides),
+      variant: buildInvestigationCacheVariant(metricRangeOverrides, kloudtrackConfig.environment),
     });
 
     return Response.json({
@@ -106,7 +112,8 @@ export async function POST(request: Request) {
     };
 
     const metricRangeOverrides = await readMetricRangeOverridesFromCookies();
-    const cacheVariant = JSON.stringify(metricRangeOverrides);
+    const kloudtrackConfig = resolveKloudtrackConfigFromRequest(request);
+    const cacheVariant = buildInvestigationCacheVariant(metricRangeOverrides, kloudtrackConfig.environment);
     const requestedDemoData = body.useDemoData ?? false;
     const askCopilot = body.askCopilot ?? false;
     const selection = parseSelection(body);
@@ -130,7 +137,7 @@ export async function POST(request: Request) {
       return Response.json(cached);
     }
 
-    const source = await loadTelemetry(selection, requestedDemoData);
+    const source = await loadTelemetry(selection, requestedDemoData, kloudtrackConfig);
     const aggregatedSource = {
       station: source.station,
       series: source.series.map((item) => ({
@@ -176,7 +183,8 @@ export async function POST(request: Request) {
       aiFinishReason: aiResult?.finishReason,
       records: primary.records,
       metricAnalyses,
-      source: requestedDemoData || !process.env.KLOUDTRACK_API_TOKEN ? "demo" : "kloudtrack",
+      source: requestedDemoData || !kloudtrackConfig.apiToken ? "demo" : "kloudtrack",
+      environment: kloudtrackConfig.environment,
     };
 
     if (canUseCache) {
@@ -264,15 +272,19 @@ function parseSelection(
   };
 }
 
-async function loadTelemetry(selection: InvestigationSelection, useDemoData: boolean): Promise<{
+async function loadTelemetry(
+  selection: InvestigationSelection,
+  useDemoData: boolean,
+  kloudtrackConfig: KloudtrackEnvironmentConfig,
+): Promise<{
   station: StationMetadata;
   series: Array<{ metric: MetricKey; records: TelemetryRecord[] }>;
 }> {
   if (selection.metric === "all") {
-    return loadAllTelemetry(selection, useDemoData);
+    return loadAllTelemetry(selection, useDemoData, kloudtrackConfig);
   }
 
-  if (useDemoData || !process.env.KLOUDTRACK_API_TOKEN) {
+  if (useDemoData || !kloudtrackConfig.apiToken) {
     const demo = createDemoTelemetry(
       selection.stationId,
       selection.metric,
@@ -290,11 +302,11 @@ async function loadTelemetry(selection: InvestigationSelection, useDemoData: boo
     selection.metric,
     {
       skip: "0",
-      take: "2000",
       interval: selection.aggregationMinutes.toString(),
       startDate: selection.start,
       endDate: selection.end,
     },
+    kloudtrackConfig,
   );
 
   const normalized = normalizeTelemetry(raw);
@@ -304,8 +316,12 @@ async function loadTelemetry(selection: InvestigationSelection, useDemoData: boo
   };
 }
 
-async function loadAllTelemetry(selection: InvestigationSelection, useDemoData: boolean) {
-  if (useDemoData || !process.env.KLOUDTRACK_API_TOKEN) {
+async function loadAllTelemetry(
+  selection: InvestigationSelection,
+  useDemoData: boolean,
+  kloudtrackConfig: KloudtrackEnvironmentConfig,
+) {
+  if (useDemoData || !kloudtrackConfig.apiToken) {
     const demoSeries = allMetricKeys.map((metric) => {
       const demo = createDemoTelemetry(selection.stationId, metric, selection.start, selection.end);
       return { metric, records: demo.records, station: demo.station };
@@ -318,12 +334,21 @@ async function loadAllTelemetry(selection: InvestigationSelection, useDemoData: 
 
   const raw = await getAllTelemetryHistoryFromKloudtrackApi(selection.stationId, {
     skip: "0",
-    take: "2000",
     interval: selection.aggregationMinutes.toString(),
     startDate: selection.start,
     endDate: selection.end,
-  });
+  }, kloudtrackConfig);
   return normalizeAllTelemetry(raw);
+}
+
+function buildInvestigationCacheVariant(
+  metricRangeOverrides: Record<string, { minimum: number; maximum: number }>,
+  environment: KloudtrackEnvironmentConfig["environment"],
+) {
+  return JSON.stringify({
+    environment,
+    metricRangeOverrides,
+  });
 }
 
 function analyzeMetricSeries(
