@@ -3,14 +3,13 @@
 import { useEffect, useState } from "react";
 import { PageShell } from "./layout/PageShell";
 import type { InvestigationMetricKey, StationMetadata } from "@/lib/telemetry-types";
-import { CopilotPanel } from "./telemetry/CopilotPanel";
 import { EventsPanel } from "./telemetry/EventsPanel";
 import { FetchedValuesTable } from "./telemetry/FetchedValuesTable";
 import { InvestigationScopePanel } from "./telemetry/InvestigationScopePanel";
 import { OutlierOverview } from "./telemetry/OutlierOverview";
 import { SummaryStats } from "./telemetry/SummaryStats";
 import { TelemetryTimeline } from "./telemetry/TelemetryTimeline";
-import { metrics, questions } from "./telemetry/constants";
+import { metrics } from "./telemetry/constants";
 import type { InvestigationBatchCacheResponse, InvestigationResponse, StationsResponse } from "./telemetry/types";
 import { phtDayBoundaryToUtcISOString, philippineInputToUtcISOString, toInputValue } from "./telemetry/utils";
 import { useInvestigationQuickActionStore } from "./telemetry/useInvestigationQuickActionStore";
@@ -40,7 +39,6 @@ export function TelemetryInvestigationDashboard() {
 
     return toInputValue(date);
   });
-  const [question, setQuestion] = useState(questions[0]);
   const [data, setData] = useState<InvestigationResponse | null>(null);
   const [manualDataStationId, setManualDataStationId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -116,15 +114,7 @@ export function TelemetryInvestigationDashboard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  async function runInvestigation({
-    askCopilot = false,
-    nextQuestion = question,
-    selectedStationId = stationId,
-  }: {
-    askCopilot?: boolean;
-    nextQuestion?: string;
-    selectedStationId?: string;
-  } = {}) {
+  async function runInvestigation(selectedStationId = stationId) {
     if (quickActionRunning) return;
 
     resetQuickAction();
@@ -143,8 +133,6 @@ export function TelemetryInvestigationDashboard() {
           aggregationMinutes,
           start: philippineInputToUtcISOString(start),
           end: philippineInputToUtcISOString(end),
-          question: nextQuestion,
-          askCopilot,
           useDemoData: false,
         }),
       });
@@ -213,8 +201,6 @@ export function TelemetryInvestigationDashboard() {
               aggregationMinutes: batchScope.aggregationMinutes,
               start: batchScope.start,
               end: batchScope.end,
-              question: batchScope.question,
-              askCopilot: false,
               useDemoData: false,
             }),
           },
@@ -244,7 +230,7 @@ export function TelemetryInvestigationDashboard() {
   return (
     <PageShell
       eyebrow="Internal telemetry intelligence"
-      title="Telemetry Investigation Copilot"
+      title="Telemetry Investigation"
     >
       <main className="grid min-w-0 gap-4 lg:grid-cols-[320px_minmax(0,1fr)]">
         <InvestigationScopePanel
@@ -286,7 +272,7 @@ export function TelemetryInvestigationDashboard() {
                 <p className="text-xs font-semibold uppercase tracking-[0.16em] text-label">
                   Investigation workspace
                 </p>
-                <h2 className="mt-1 text-xl font-semibold text-heading">Evidence first, assistance on demand</h2>
+                <h2 className="mt-1 text-xl font-semibold text-heading">Evidence first investigation workspace</h2>
               </div>
               <span className="status-chip">{sourceLabel}</span>
             </div>
@@ -313,14 +299,6 @@ export function TelemetryInvestigationDashboard() {
         </section>
       </main>
 
-      <CopilotPanel
-        question={question}
-        metric={metric}
-        data={displayedData}
-        loading={loading}
-        onQuestionChange={setQuestion}
-        onRun={() => void runInvestigation({ askCopilot: true })}
-      />
     </PageShell>
   );
 }
@@ -364,7 +342,6 @@ function buildBatchInvestigationScope({
     return {
       ...buildYesterdayFullDayRange(),
       aggregationMinutes: 1,
-      question: "Summarize every metric for yesterday's full day.",
     };
   }
 
@@ -372,7 +349,6 @@ function buildBatchInvestigationScope({
     start: philippineInputToUtcISOString(customStart),
     end: philippineInputToUtcISOString(customEnd),
     aggregationMinutes: customAggregationMinutes,
-    question: "Summarize every metric for the selected custom batch range.",
   };
 }
 

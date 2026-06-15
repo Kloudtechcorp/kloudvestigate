@@ -160,7 +160,7 @@ function QuickCommandsSection() {
       <p className="text-xs font-semibold uppercase tracking-[0.14em] text-label">Quick commands</p>
       <div className="mt-3 grid gap-2">
         {quickCommands.map((item) => (
-          <Link className="question-button" href={item.href} key={item.href}>
+          <Link className="quick-link-button" href={item.href} key={item.href}>
             {item.label}
           </Link>
         ))}

@@ -10,8 +10,8 @@ export default function ArchitecturePage() {
   return (
     <PageShell
       eyebrow="System design"
-      title="Telemetry Copilot Architecture"
-      description={data.project.tokenSavingSummary}
+      title="Telemetry Investigation Architecture"
+      description={data.project.summary}
     >
       <div className="grid gap-4">
         <section className="grid gap-4 lg:grid-cols-3">

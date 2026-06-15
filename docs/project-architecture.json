@@ -3,20 +3,19 @@
     "name": "kloudvestigate",
     "purpose": "Internal telemetry investigation and publication-material preparation tool for KloudTrack station data.",
     "framework": "Next.js 16.2.6 App Router with React 19.2.4 and TypeScript.",
-    "tokenSavingSummary": "Use this file as the compact project map for future model work. The app has server-rendered App Router pages, small client islands for dashboards and Mermaid rendering, route-handler APIs as the backend-for-frontend layer, server-only KloudTrack and Gemini calls, deterministic telemetry analysis before AI explanation, and demo data fallback when upstream tokens are missing."
+    "summary": "Use this file as the compact project map for future work. The app has server-rendered App Router pages, focused client dashboards, route-handler APIs as the backend-for-frontend layer, server-only KloudTrack access, deterministic telemetry analysis, and demo data fallback when upstream credentials are missing."
   },
   "runtime": {
     "client": [
       "app/page.tsx renders the main investigation dashboard shell.",
       "app/pubmat/page.tsx renders the publication-material workflow shell.",
-      "components/telemetry/* contains client dashboards, forms, tables, markdown rendering, and charts.",
+      "components/telemetry/* contains client dashboards, forms, tables, charts, and station aggregate workflows.",
       "components/architecture/MermaidDiagram.tsx is the browser-only Mermaid renderer used by the architecture page."
     ],
     "server": [
       "App Router pages are Server Components by default unless a child component declares use client.",
-      "app/api/investigations/route.ts handles investigation runs and optional copilot answers.",
+      "app/api/investigations/route.ts handles investigation runs and cache lookups.",
       "app/api/pubmat-quick-fetch/route.ts fetches station buckets for publication tables.",
-      "app/api/pubmat-chat/route.ts answers questions over the fetched publication table.",
       "app/api/stations/route.ts returns station metadata from KloudTrack or demo data."
     ]
   },
@@ -24,11 +23,11 @@
     {
       "name": "Telemetry UI",
       "paths": ["components/TelemetryInvestigationDashboard.tsx", "components/telemetry/*"],
-      "responsibility": "Owns operator controls, quick fetch UX, fetched values tables, markdown answers, summaries, events, and visualization panels."
+      "responsibility": "Owns operator controls, quick fetch UX, fetched values tables, summaries, events, and visualization panels."
     },
     {
       "name": "KloudTrack API adapter",
-      "paths": ["lib/kloudtrack-api.ts", "monitorConstant.ts"],
+      "paths": ["lib/kloudtrack-api.ts"],
       "responsibility": "Keeps x-kloudtrack-key server-side, resolves metric history endpoints, fetches dashboard/history data, and normalizes upstream responses."
     },
     {
@@ -37,57 +36,53 @@
       "responsibility": "Computes deterministic summaries, interval buckets, gaps, duplicates, spikes, flatlines, threshold crossings, range violations, and metric metadata."
     },
     {
-      "name": "AI context and providers",
-      "paths": ["lib/ai-context.ts", "lib/gemini.ts", "app/api/pubmat-chat/route.ts"],
-      "responsibility": "Builds compact JSON prompts, provides deterministic fallback explanations, and calls Gemini only from server routes."
+      "name": "Investigation cache",
+      "paths": ["lib/server-investigation-cache.ts"],
+      "responsibility": "Stores recent deterministic investigation payloads in memory for batch lookup and dashboard hydration."
     }
   ],
   "security": [
-    "assertInternalAccess checks INTERNAL_COPILOT_TOKEN in production-like environments.",
-    "KloudTrack and Gemini API keys are read only in server modules and route handlers.",
+    "assertInternalAccess checks INTERNAL_ACCESS_TOKEN in production-like environments.",
+    "KloudTrack API keys are read only in server modules and route handlers.",
     "writeAuditEvent currently emits structured audit JSON to console.",
-    "Production should run behind SSO or VPN and configure INTERNAL_COPILOT_TOKEN."
+    "Production should run behind SSO or VPN and configure INTERNAL_ACCESS_TOKEN."
   ],
   "dataFlow": [
-    "Operator selects station, metric, time range, interval, and question.",
+    "Operator selects station, metric, time range, and interval.",
     "Client component POSTs to an App Router route handler.",
     "Route handler validates internal access and request shape.",
     "Server loads telemetry from KloudTrack or demo data.",
     "Normalizer converts upstream payloads into typed station and telemetry records.",
-    "Deterministic analysis creates summaries and anomalies before any AI call.",
-    "AI context builder omits raw minute arrays and includes compact findings.",
-    "Gemini answers from structured context when configured; otherwise deterministic fallback is returned.",
-    "Client renders tables, charts, events, markdown, and status summaries."
+    "Deterministic analysis creates summaries, anomalies, interval buckets, and record tables.",
+    "Client renders tables, charts, events, and status summaries."
   ],
   "diagrams": [
     {
       "id": "server-architecture",
       "title": "Server Architecture",
-      "description": "Route handlers form a backend-for-frontend layer around authentication, upstream data access, deterministic analysis, compact AI context, and provider calls.",
-      "mermaid": "flowchart LR\n  Client[Client dashboards] -->|GET/POST| Routes[Next App Router route handlers]\n  Routes --> Auth[assertInternalAccess]\n  Auth --> Loader[Telemetry loaders]\n  Loader --> Demo[Demo telemetry fallback]\n  Loader --> Kloud[KloudTrack API adapter]\n  Kloud --> Normalize[Normalize station and telemetry records]\n  Demo --> Normalize\n  Normalize --> Analyze[Deterministic analysis]\n  Analyze --> Context[Compact AI context]\n  Context --> Gemini[Gemini provider]\n  Context --> Fallback[Deterministic fallback]\n  Gemini --> Response[JSON response]\n  Fallback --> Response\n  Analyze --> Audit[Structured audit log]"
+      "description": "Route handlers form a backend-for-frontend layer around authentication, upstream data access, deterministic analysis, caching, and audit logging.",
+      "mermaid": "flowchart LR\n  Client[Client dashboards] -->|GET/POST| Routes[Next App Router route handlers]\n  Routes --> Auth[assertInternalAccess]\n  Auth --> Loader[Telemetry loaders]\n  Loader --> Demo[Demo telemetry fallback]\n  Loader --> Kloud[KloudTrack API adapter]\n  Kloud --> Normalize[Normalize station and telemetry records]\n  Demo --> Normalize\n  Normalize --> Analyze[Deterministic analysis]\n  Analyze --> Cache[Investigation cache]\n  Analyze --> Response[JSON response]\n  Cache --> Response\n  Analyze --> Audit[Structured audit log]"
     },
     {
       "id": "client-architecture",
       "title": "Client Architecture",
-      "description": "Server pages keep shells light, while focused client components own stateful investigation, publication, markdown, table, and Mermaid interactions.",
-      "mermaid": "flowchart TD\n  Layout[app/layout.tsx] --> Home[app/page.tsx]\n  Layout --> Pubmat[app/pubmat/page.tsx]\n  Layout --> Architecture[app/architecture/page.tsx]\n  Home --> Dashboard[TelemetryInvestigationDashboard]\n  Pubmat --> Workspace[PubmatWorkspace]\n  Workspace --> QuickFetch[PubmatQuickFetch]\n  Workspace --> Chat[PubmatChatPanel]\n  QuickFetch --> Values[FetchedValuesTable]\n  Chat --> Markdown[MarkdownRenderer]\n  Architecture --> Mermaid[MermaidDiagram client island]"
+      "description": "Server pages keep shells light, while focused client components own stateful investigation, publication, table, chart, and Mermaid interactions.",
+      "mermaid": "flowchart TD\n  Layout[app/layout.tsx] --> Home[app/page.tsx]\n  Layout --> Pubmat[app/pubmat/page.tsx]\n  Layout --> Architecture[app/architecture/page.tsx]\n  Home --> Dashboard[TelemetryInvestigationDashboard]\n  Pubmat --> Workspace[PubmatWorkspace]\n  Workspace --> QuickFetch[PubmatQuickFetch]\n  QuickFetch --> Values[FetchedValuesTable]\n  Dashboard --> Summary[SummaryStats]\n  Dashboard --> Timeline[TelemetryTimeline]\n  Dashboard --> Events[EventsPanel]\n  Architecture --> Mermaid[MermaidDiagram client island]"
     },
     {
-      "id": "token-strategy",
-      "title": "Token Strategy",
-      "description": "Raw telemetry stays out of prompts; the model receives a compressed, deterministic explanation surface.",
-      "mermaid": "sequenceDiagram\n  participant Operator\n  participant Client\n  participant API as Route Handler\n  participant Analysis as Deterministic Analysis\n  participant Context as AI Context Builder\n  participant Model as Gemini or Fallback\n  Operator->>Client: Ask investigation question\n  Client->>API: Send selection and question\n  API->>Analysis: Analyze normalized records\n  Analysis->>Context: Summaries, events, intervals, warnings\n  Context->>Model: Compact prompt without raw minute arrays\n  Model-->>API: Answer grounded in supplied context\n  API-->>Client: JSON answer and analysis payload"
+      "id": "response-strategy",
+      "title": "Response Strategy",
+      "description": "The investigation API returns deterministic findings and chart/table data directly to the UI.",
+      "mermaid": "sequenceDiagram\n  participant Operator\n  participant Client\n  participant API as Route Handler\n  participant Loader as Telemetry Loader\n  participant Analysis as Deterministic Analysis\n  Operator->>Client: Run investigation\n  Client->>API: Send selection\n  API->>Loader: Load normalized telemetry\n  Loader-->>API: Station and records\n  API->>Analysis: Analyze selected metric series\n  Analysis-->>API: Summaries, events, intervals\n  API-->>Client: JSON investigation payload"
     }
   ],
   "environment": [
     "KLOUDTRACK_API_BASE_URL defaults to https://api.kloudtechsea.com/api/v1.",
     "KLOUDTRACK_API_TOKEN enables real upstream telemetry; absence uses demo data in current flows.",
-    "INTERNAL_COPILOT_TOKEN guards internal API access when configured or in production.",
-    "GEMINI_API_KEY enables AI answers; absence uses deterministic fallback text.",
-    "GEMINI_MODEL defaults to gemini-2.5-flash.",
-    "GEMINI_MAX_OUTPUT_TOKENS defaults to 2400."
+    "BETA_KLOUDTRACK_API_TOKEN enables the beta KloudTrack environment.",
+    "INTERNAL_ACCESS_TOKEN guards internal API access when configured or in production."
   ],
   "futureWork": [
-    "Add automated tests around metric endpoint resolution, bucket windows, and prompt compaction."
+    "Add automated tests around metric endpoint resolution, bucket windows, and investigation payload shape."
   ]
 }

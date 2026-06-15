@@ -4,8 +4,8 @@ import { ThemeProvider } from "@/components/theme/ThemeProvider";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Telemetry Investigation Copilot",
-  description: "Internal operational telemetry investigation assistant",
+  title: "Telemetry Investigation",
+  description: "Internal operational telemetry investigation dashboard",
 };
 
 const themeBootstrapScript = `
