@@ -1,5 +1,4 @@
 import type {
-  InvestigationContext,
   InvestigationSelection,
   InvestigationMetricKey,
   MetricKey,
@@ -38,14 +37,7 @@ export interface InvestigationResponse {
   selection: InvestigationSelection;
   station: StationMetadata;
   analysis: TelemetryAnalysis;
-  context: InvestigationContext;
-  prompt: string | null;
   pointMatch: PointMatch | null;
-  answer: string | null;
-  aiProvider: "gemini" | "deterministic" | null;
-  aiError?: string;
-  aiWarning?: string;
-  aiFinishReason?: string;
   records: TelemetryRecord[];
   metricAnalyses?: MetricInvestigationAnalysis[];
   source: SourceKind;

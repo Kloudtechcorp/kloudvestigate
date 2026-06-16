@@ -1,8 +1,5 @@
-import { buildAiPrompt, buildInvestigationContext, explainFindings } from "@/lib/ai-context";
 import { assertInternalAccess, writeAuditEvent } from "@/lib/auth";
-import { generateGeminiAnswer } from "@/lib/gemini";
 import {
-  canUseServerInvestigationCache,
   readServerBatchInvestigationCache,
   readServerInvestigationCache,
   writeServerInvestigationCache,
@@ -105,9 +102,7 @@ export async function POST(request: Request) {
 
   try {
     const body = (await request.json()) as Partial<InvestigationSelection> & {
-      question?: string;
       pointTimestamp?: string;
-      askCopilot?: boolean;
       useDemoData?: boolean;
     };
 
@@ -115,12 +110,8 @@ export async function POST(request: Request) {
     const kloudtrackConfig = resolveKloudtrackConfigFromRequest(request);
     const cacheVariant = buildInvestigationCacheVariant(metricRangeOverrides, kloudtrackConfig.environment);
     const requestedDemoData = body.useDemoData ?? false;
-    const askCopilot = body.askCopilot ?? false;
     const selection = parseSelection(body);
-    const canUseCache = canUseServerInvestigationCache({
-      askCopilot,
-      pointTimestamp: body.pointTimestamp,
-    });
+    const canUseCache = !body.pointTimestamp;
     const cached = canUseCache
       ? await readServerInvestigationCache(selection, cacheVariant)
       : null;
@@ -149,38 +140,15 @@ export async function POST(request: Request) {
     const primary = metricAnalyses[0];
     if (!primary) throw new Error("No telemetry records were available for the selected metric.");
 
-    const context = buildInvestigationContext(
-      source.station,
-      primary.metric,
-      selection,
-      primary.analysis,
-      primary.analysis.metricProfile.thresholdDetection === false
-        ? defaultWarningLevels
-        : primary.analysis.metricProfile.warningLevels ?? defaultWarningLevels,
-      primary.records.length,
-    );
-    const question = body.question || "Summarize the selected telemetry range.";
-    const prompt = askCopilot ? buildAiPrompt(context, question) : null;
     const pointMatch = body.pointTimestamp
       ? findPointInTime(primary.records, body.pointTimestamp)
-      : null;
-    const deterministicAnswer = askCopilot ? explainFindings(context, question) : null;
-    const aiResult = prompt && deterministicAnswer
-      ? await generateAnswer(prompt, deterministicAnswer)
       : null;
 
     const payload = {
       selection,
       station: source.station,
       analysis: primary.analysis,
-      context,
-      prompt,
       pointMatch,
-      answer: aiResult?.answer ?? null,
-      aiProvider: aiResult?.provider ?? null,
-      aiError: aiResult?.error,
-      aiWarning: aiResult?.warning,
-      aiFinishReason: aiResult?.finishReason,
       records: primary.records,
       metricAnalyses,
       source: requestedDemoData || !kloudtrackConfig.apiToken ? "demo" : "kloudtrack",
@@ -193,13 +161,10 @@ export async function POST(request: Request) {
 
     writeAuditEvent({
       action: "investigation.run",
-      askCopilot,
       stationId: selection.stationId,
       metric: selection.metric,
       start: selection.start,
       end: selection.end,
-      promptTokensEstimated: context.tokenBudget.estimatedTokens,
-      aiProvider: aiResult?.provider ?? null,
     });
 
     return Response.json(payload);
@@ -211,37 +176,6 @@ export async function POST(request: Request) {
       },
       { status: 400 },
     );
-  }
-}
-
-async function generateAnswer(
-  prompt: string,
-  fallbackAnswer: string,
-): Promise<{
-  answer: string;
-  provider: "gemini" | "deterministic";
-  error?: string;
-  warning?: string;
-  finishReason?: string;
-}> {
-  if (!process.env.GEMINI_API_KEY) {
-    return { answer: fallbackAnswer, provider: "deterministic" };
-  }
-
-  try {
-    const result = await generateGeminiAnswer(prompt);
-    return {
-      answer: result.answer,
-      provider: "gemini",
-      warning: result.warning,
-      finishReason: result.finishReason,
-    };
-  } catch (error) {
-    return {
-      answer: fallbackAnswer,
-      provider: "deterministic",
-      error: error instanceof Error ? error.message : "Gemini request failed.",
-    };
   }
 }
 

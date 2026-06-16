@@ -1,4 +1,4 @@
-# Internal Telemetry AI Copilot Architecture
+# Internal Telemetry Investigation Architecture
 
 The canonical compact project map now lives in `docs/project-architecture.json`.
 Use that JSON when a future model needs the current setup without rereading the
@@ -13,8 +13,7 @@ component.
 3. The server fetches history from KloudTrack API using `x-kloudtrack-key`.
 4. Responses are normalized into `{ station, records[] }`.
 5. `lib/telemetry-analysis.ts` deterministically computes summaries, gaps, duplicates, spikes, flatlines, thresholds, and interval buckets.
-6. `lib/ai-context.ts` builds a compressed JSON payload and prompt.
-7. The AI layer explains computed findings only.
+6. The route returns computed summaries, event lists, interval buckets, and fetched records to the dashboard.
 
 ## Endpoint Strategy
 
@@ -24,6 +23,6 @@ component.
 
 The root `monitorConstant.ts` file documents the upstream API contract and is supported by a local `Endpoint` type so it remains compile-safe.
 
-## Token Strategy
+## Response Strategy
 
-Raw minute arrays are omitted from AI prompts. Context contains interval summaries, significant readings, warning crossings, spikes, missing periods, duplicate timestamps, flatlines, and token estimates.
+The API returns deterministic telemetry findings and the records needed by the dashboard. External provider calls are not part of the investigation flow.

@@ -12,37 +12,7 @@ const quickCommands: Array<{ label: string; href: string }> = [
   // { label: "Get Pubmat All Metrics (2PM)", href: "/pubmat?metric=all&interval=60&run=1" },
 ];
 
-export function InvestigationScopePanel({
-  stations,
-  stationId,
-  metric,
-  metrics,
-  start,
-  end,
-  aggregationMinutes,
-  onStationChange,
-  onMetricChange,
-  onStartChange,
-  onEndChange,
-  onAggregationChange,
-  onRunInvestigation,
-  runInvestigationBusy,
-  runInvestigationDisabled,
-  onQuickInvestigateEveryStation,
-  quickActionBusy,
-  quickActionProgress,
-  quickActionResultsByStationId = {},
-  batchCustomScopeEnabled = false,
-  batchStart,
-  batchEnd,
-  batchAggregationMinutes = 1,
-  batchStationIds = null,
-  onBatchStationIdsChange,
-  onBatchCustomScopeEnabledChange,
-  onBatchStartChange,
-  onBatchEndChange,
-  onBatchAggregationChange,
-}: {
+type InvestigationScopePanelProps = {
   stations: StationMetadata[];
   stationId: string;
   metric: InvestigationMetricKey;
@@ -72,95 +42,207 @@ export function InvestigationScopePanel({
   onBatchStartChange?: (value: string) => void;
   onBatchEndChange?: (value: string) => void;
   onBatchAggregationChange?: (value: number) => void;
-}) {
+  sourceLabel?: string;
+};
+
+export function InvestigationScopePanel(props: InvestigationScopePanelProps) {
+  const {
+    stations,
+    stationId,
+    onStationChange,
+    onQuickInvestigateEveryStation,
+    quickActionBusy,
+    quickActionProgress,
+    quickActionResultsByStationId = {},
+    batchCustomScopeEnabled = false,
+    batchStart,
+    batchEnd,
+    batchAggregationMinutes = 1,
+    batchStationIds = null,
+    onBatchStationIdsChange,
+    onBatchCustomScopeEnabledChange,
+    onBatchStartChange,
+    onBatchEndChange,
+    onBatchAggregationChange,
+    sourceLabel,
+  } = props;
   const hasQuickActionResults = quickActionBusy || Object.keys(quickActionResultsByStationId).length > 0;
   const batchControlsMounted = useHydrated();
 
   return (
-    <aside className="panel h-fit lg:sticky lg:top-5">
-      <h2 className="panel-title">Investigation Scope</h2>
+    <aside className="panel h-fit overflow-hidden p-0 lg:sticky lg:top-16 lg:max-h-[calc(100vh-64px)] lg:overflow-y-auto">
+      <div className="border-b border-border bg-bg-raised px-4 py-2">
+        <h2 className="text-[11px] font-semibold uppercase tracking-wide text-text-muted">Scope</h2>
+      </div>
+      <div className="grid gap-4 px-4 py-4">
+        <ScopeFields {...props} />
+        <RunInvestigationControl {...props} />
+        <QuickCommandsSection />
+        {onQuickInvestigateEveryStation ? (
+          <details className="border-t border-border pt-3">
+            <summary className="cursor-pointer list-none text-xs font-semibold uppercase tracking-wide text-text-muted">
+              Station Batch
+            </summary>
+            {batchControlsMounted ? (
+              <StationBatchSection
+                stations={stations}
+                stationId={stationId}
+                onStationChange={onStationChange}
+                onQuickInvestigateEveryStation={onQuickInvestigateEveryStation}
+                quickActionBusy={quickActionBusy}
+                quickActionProgress={quickActionProgress}
+                quickActionResultsByStationId={quickActionResultsByStationId}
+                hasQuickActionResults={hasQuickActionResults}
+                customScopeEnabled={batchCustomScopeEnabled}
+                customStart={batchStart}
+                customEnd={batchEnd}
+                customAggregationMinutes={batchAggregationMinutes}
+                selectedStationIds={batchStationIds}
+                onSelectedStationIdsChange={onBatchStationIdsChange}
+                onCustomScopeEnabledChange={onBatchCustomScopeEnabledChange}
+                onCustomStartChange={onBatchStartChange}
+                onCustomEndChange={onBatchEndChange}
+                onCustomAggregationChange={onBatchAggregationChange}
+              />
+            ) : (
+              <StationBatchPlaceholder />
+            )}
+          </details>
+        ) : null}
+        <EnvironmentLine sourceLabel={sourceLabel} />
+      </div>
+    </aside>
+  );
+}
+
+const aggregationOptions = [
+  { label: "1m", value: 1 },
+  { label: "15m", value: 15 },
+  { label: "30m", value: 30 },
+  { label: "1h", value: 60 },
+  { label: "6h", value: 360 },
+  { label: "12h", value: 720 },
+  { label: "Daily", value: 1440 },
+];
+
+function ScopeFields({
+  stations,
+  stationId,
+  metric,
+  metrics,
+  start,
+  end,
+  aggregationMinutes,
+  onStationChange,
+  onMetricChange,
+  onStartChange,
+  onEndChange,
+  onAggregationChange,
+}: InvestigationScopePanelProps) {
+  return (
+    <section className="grid gap-3">
       <label className="field-label">
         Station
-        <select className="field" value={stationId} onChange={(event) => onStationChange(event.target.value)}>
-          {stations.length ? stations.map((station) => (
-            <option key={station.id} value={station.id}>{station.name}</option>
-          )) : (
-            <option value={stationId}>Loading stations</option>
-          )}
-        </select>
+        {stations.length ? (
+          <select className="field" value={stationId} onChange={(event) => onStationChange(event.target.value)}>
+            {stations.map((station) => (
+              <option key={station.id} value={station.id}>{station.name}</option>
+            ))}
+          </select>
+        ) : (
+          <span className="h-8 w-full animate-pulse rounded-[4px] bg-bg-raised" />
+        )}
       </label>
+
       <label className="field-label">
         Metric
         <select className="field" value={metric} onChange={(event) => onMetricChange(event.target.value as InvestigationMetricKey)}>
           {metrics.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
         </select>
       </label>
-      <label className="field-label">
-        Start (PH)
-        <input className="field" type="datetime-local" value={start} onChange={(event) => onStartChange(event.target.value)} />
-      </label>
-      <label className="field-label">
-        End (PH)
-        <input className="field" type="datetime-local" value={end} onChange={(event) => onEndChange(event.target.value)} />
-      </label>
-      <label className="field-label">
-        Aggregation
-        <select className="field" value={aggregationMinutes} onChange={(event) => onAggregationChange(Number(event.target.value))}>
-          <option value={1}>1 minute</option>
-          <option value={15}>15 minutes</option>
-          <option value={30}>30 minutes</option>
-          <option value={60}>1 hour</option>
-          <option value={360}>6 hours</option>
-          <option value={720}>12 hours</option>
-          <option value={1440}>Daily</option>
-        </select>
-      </label>
-      <button
-        className="primary-action mt-4 w-full"
-        type="button"
-        onClick={onRunInvestigation}
-        disabled={runInvestigationBusy || runInvestigationDisabled}
-      >
-        {runInvestigationBusy ? "Analyzing" : "Run investigation"}
-      </button>
-      <QuickCommandsSection />
-      {onQuickInvestigateEveryStation ? (
-        batchControlsMounted ? (
-          <StationBatchSection
-            stations={stations}
-            stationId={stationId}
-            onStationChange={onStationChange}
-            onQuickInvestigateEveryStation={onQuickInvestigateEveryStation}
-            quickActionBusy={quickActionBusy}
-            quickActionProgress={quickActionProgress}
-            quickActionResultsByStationId={quickActionResultsByStationId}
-            hasQuickActionResults={hasQuickActionResults}
-            customScopeEnabled={batchCustomScopeEnabled}
-            customStart={batchStart}
-            customEnd={batchEnd}
-            customAggregationMinutes={batchAggregationMinutes}
-            selectedStationIds={batchStationIds}
-            onSelectedStationIdsChange={onBatchStationIdsChange}
-            onCustomScopeEnabledChange={onBatchCustomScopeEnabledChange}
-            onCustomStartChange={onBatchStartChange}
-            onCustomEndChange={onBatchEndChange}
-            onCustomAggregationChange={onBatchAggregationChange}
-          />
-        ) : (
-          <StationBatchPlaceholder />
-        )
-      ) : null}
-    </aside>
+
+      <div className="grid gap-3">
+        <label className="field-label">
+          Start
+          <span className="flex items-center gap-2">
+            <input className="field min-w-0 flex-1" type="datetime-local" value={start} onChange={(event) => onStartChange(event.target.value)} />
+            <span className="status-chip">PHT</span>
+          </span>
+        </label>
+        <label className="field-label">
+          End
+          <span className="flex items-center gap-2">
+            <input className="field min-w-0 flex-1" type="datetime-local" value={end} onChange={(event) => onEndChange(event.target.value)} />
+            <span className="status-chip">PHT</span>
+          </span>
+        </label>
+      </div>
+
+      <div className="grid gap-1">
+        <span className="field-label">Aggregation</span>
+        <div className="grid grid-cols-3 gap-1">
+          {aggregationOptions.map((option) => (
+            <button
+              className={`h-7 rounded-[3px] border px-2 text-xs font-medium ${
+                aggregationMinutes === option.value
+                  ? "border-accent bg-accent text-[#111318]"
+                  : "border-border bg-bg-raised text-text-secondary hover:text-text-primary"
+              }`}
+              key={option.value}
+              type="button"
+              onClick={() => onAggregationChange(option.value)}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function RunInvestigationControl({
+  onRunInvestigation,
+  runInvestigationBusy,
+  runInvestigationDisabled,
+}: InvestigationScopePanelProps) {
+  return (
+    <button
+      className="primary-action h-9 w-full"
+      type="button"
+      onClick={onRunInvestigation}
+      disabled={runInvestigationBusy || runInvestigationDisabled}
+    >
+      {runInvestigationBusy ? (
+        <span className="inline-flex items-center justify-center gap-2">
+          <span className="h-4 w-4 animate-spin rounded-full border-2 border-[#111318] border-t-transparent" />
+          Running...
+        </span>
+      ) : "Run investigation"}
+    </button>
+  );
+}
+
+function EnvironmentLine({ sourceLabel }: { sourceLabel?: string }) {
+  return (
+    <div className="flex flex-wrap gap-x-3 gap-y-1 border-t border-border pt-3 text-xs text-text-muted">
+      <span>
+        ENV: <span className="font-mono">{sourceLabel?.includes("KloudTrack") ? "production" : "demo"}</span>
+      </span>
+      <span>
+        SOURCE: <span className="font-mono">{sourceLabel ?? "Demo fallback"}</span>
+      </span>
+    </div>
   );
 }
 
 function QuickCommandsSection() {
   return (
-    <div className="mt-4 border-t border-border-subtle pt-4">
+    <div className="border-t border-border pt-3">
       <p className="text-xs font-semibold uppercase tracking-[0.14em] text-label">Quick commands</p>
       <div className="mt-3 grid gap-2">
         {quickCommands.map((item) => (
-          <Link className="question-button" href={item.href} key={item.href}>
+          <Link className="quick-link-button" href={item.href} key={item.href}>
             {item.label}
           </Link>
         ))}
@@ -179,8 +261,7 @@ function useHydrated() {
 
 function StationBatchPlaceholder() {
   return (
-    <div className="mt-4 border-t border-border-subtle pt-4">
-      <p className="text-xs font-semibold uppercase tracking-[0.14em] text-label">Station batch</p>
+    <div className="mt-3">
       <div className="mt-3 rounded-[6px] border border-border-subtle bg-surface p-3">
         <p className="text-sm font-semibold text-card-foreground">Batch stations</p>
         <p className="mt-2 text-xs leading-5 text-label">Loading station selection</p>
@@ -250,8 +331,7 @@ function StationBatchSection({
   }
 
   return (
-    <div className="mt-4 border-t border-border-subtle pt-4">
-      <p className="text-xs font-semibold uppercase tracking-[0.14em] text-label">Station batch</p>
+    <div className="mt-3">
       {onSelectedStationIdsChange ? (
         <div className="mt-3 rounded-[6px] border border-border-subtle bg-surface p-3">
           <div className="flex items-center justify-between gap-3">
@@ -402,7 +482,7 @@ function StationBatchSummary({
         <p className="text-xs font-semibold uppercase tracking-[0.14em] text-label">Station summary</p>
         {quickActionProgress ? <span className="text-xs text-label">{quickActionProgress}</span> : null}
       </div>
-      <div className="mt-3 max-h-[420px] overflow-auto rounded-[6px] border border-border-subtle bg-surface">
+      <div className="mt-3 max-h-[600px] overflow-auto rounded-[6px] border border-border-subtle bg-surface">
         {stations.map((station) => {
           const result = quickActionResultsByStationId[station.id];
           const counts = getStationIssueCounts(result);
@@ -417,7 +497,7 @@ function StationBatchSummary({
             >
               <span className="min-w-0 truncate text-sm font-semibold text-card-foreground">{station.name}</span>
               {result ? (
-                <span className="grid grid-cols-3 gap-2 text-xs text-subtle-foreground">
+                <span className="grid grid-cols-2 gap-3 text-xs text-subtle-foreground">
                   <IssueCount label="Missing" value={counts.missing} tone={counts.missing ? "caution" : "neutral"} />
                   <IssueCount label="Range" value={counts.outOfRange} tone={counts.outOfRange ? "danger" : "neutral"} />
                   {/* <IssueCount label="Warnings" value={counts.warnings} tone={counts.warnings ? "danger" : "neutral"} /> */}

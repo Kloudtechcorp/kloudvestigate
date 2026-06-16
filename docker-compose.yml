@@ -5,4 +5,4 @@ services:
       - "3000:3000"
     environment:
       KLOUDTRACK_API_BASE_URL: https://api.kloudtechsea.com/api/v1
-      INTERNAL_COPILOT_TOKEN: change-me
+      INTERNAL_ACCESS_TOKEN: change-me

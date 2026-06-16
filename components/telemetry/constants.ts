@@ -8,11 +8,3 @@ export const metrics: MetricOption[] = [
     value: metric,
   })),
 ];
-
-export const questions = [
-  "Summarize the trend from the selected range.",
-  "What timestamps did the data spike?",
-  "Did the station cross warning thresholds?",
-  "Were there missing telemetry records?",
-  "Which hour had the highest reading?",
-];

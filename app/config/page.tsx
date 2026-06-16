@@ -20,6 +20,7 @@ export default async function ConfigPage() {
     <PageShell
       eyebrow="Configuration"
       title="Metric Range Settings"
+      maxWidth="narrow"
       description={(
         <>
           Each metric starts from the range defined in <span className="font-mono">lib/metric-profiles.ts</span> and can be overridden here.

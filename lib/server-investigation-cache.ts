@@ -49,16 +49,6 @@ const investigationCache =
 
 globalForInvestigationCache.investigationCache = investigationCache;
 
-export function canUseServerInvestigationCache({
-  askCopilot,
-  pointTimestamp,
-}: {
-  askCopilot: boolean;
-  pointTimestamp?: string;
-}) {
-  return !askCopilot && !pointTimestamp;
-}
-
 export async function readServerInvestigationCache<TPayload>(
   selection: InvestigationSelection,
   variant = "",
