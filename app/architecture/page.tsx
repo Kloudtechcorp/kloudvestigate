@@ -1,6 +1,7 @@
 import architectureData from "@/docs/project-architecture.json";
 import { PageShell } from "@/components/layout/PageShell";
 import { MermaidDiagram } from "@/components/architecture/MermaidDiagram";
+import type { ReactNode } from "react";
 
 type ArchitectureData = typeof architectureData;
 
@@ -12,68 +13,102 @@ export default function ArchitecturePage() {
       eyebrow="System design"
       title="Telemetry Investigation Architecture"
       description={data.project.summary}
+      maxWidth="narrow"
     >
-      <div className="grid gap-4">
-        <section className="grid gap-4 lg:grid-cols-3">
-          <Info title="Project" items={[
-            data.project.purpose,
-            data.project.framework,
-            `Architecture source: docs/project-architecture.json`,
-          ]} />
-          <Info title="Client Side" items={data.runtime.client} />
-          <Info title="Server Side" items={data.runtime.server} />
-        </section>
+      <article className="text-sm leading-7 text-text-primary">
+        <Section title="Project">
+          <ul className="list-inside list-disc space-y-1 text-text-secondary">
+            <li>{data.project.purpose}</li>
+            <li>{data.project.framework}</li>
+            <li>
+              Architecture source: <code className="font-mono text-xs bg-bg-raised px-1 py-0.5">docs/project-architecture.json</code>
+            </li>
+          </ul>
+        </Section>
 
-        <section className="mt-4 grid gap-4">
-          {data.diagrams.map((diagram) => (
-            <div className="panel" key={diagram.id}>
-              <div className="flex flex-col gap-1">
-                <h2 className="panel-title">{diagram.title}</h2>
-                <p className="text-sm leading-6 text-muted-foreground">{diagram.description}</p>
-              </div>
-              <MermaidDiagram chart={diagram.mermaid} title={diagram.title} />
-            </div>
-          ))}
-        </section>
-
-        <section className="mt-4 grid gap-4 lg:grid-cols-[1.1fr_0.9fr]">
-          <div className="panel">
-            <h2 className="panel-title">Major Modules</h2>
-            <div className="mt-4 grid gap-3">
-              {data.majorModules.map((module) => (
-                <div className="rounded border border-border-subtle bg-surface p-3" key={module.name}>
-                  <h3 className="font-semibold text-heading">{module.name}</h3>
-                  <p className="mt-1 text-sm leading-6 text-body-copy">{module.responsibility}</p>
-                  <p className="mt-2 font-mono text-xs leading-5 text-code-foreground">{module.paths.join(", ")}</p>
-                </div>
-              ))}
-            </div>
+        <Section title="Runtime">
+          <div className="grid gap-6 md:grid-cols-2">
+            <InfoList title="Client Side" items={data.runtime.client} />
+            <InfoList title="Server Side" items={data.runtime.server} />
           </div>
+        </Section>
 
-          <div className="grid gap-4">
-            <Info title="Security" items={data.security} />
-            <Info title="Environment" items={data.environment} />
+        <Section title="Diagrams">
+          <div className="grid gap-6">
+            {data.diagrams.map((diagram) => (
+              <figure className="rounded-[6px] border border-border bg-bg-surface p-6" key={diagram.id}>
+                <figcaption className="mb-2 text-xs text-text-muted">{diagram.title}: {diagram.description}</figcaption>
+                <MermaidDiagram chart={diagram.mermaid} title={diagram.title} />
+              </figure>
+            ))}
           </div>
-        </section>
+        </Section>
 
-        <section className="mt-4 grid gap-4">
-          <div className="panel">
-            <h2 className="panel-title">Future Work</h2>
-            <ul className="mt-3 grid gap-2 text-sm leading-6 text-body-copy">
-              {data.futureWork.map((item) => <li key={item}>{item}</li>)}
-            </ul>
+        <Section title="Major Modules">
+          <div className="overflow-x-auto rounded-[6px] border border-border bg-bg-surface">
+            <table className="ops-table min-w-[680px] text-xs">
+              <thead>
+                <tr>
+                  <th className="w-[160px]">Module</th>
+                  <th className="w-[240px]">File(s)</th>
+                  <th>Description</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.majorModules.map((module) => (
+                  <tr key={module.name}>
+                    <td className="font-medium text-text-primary">{module.name}</td>
+                    <td className="font-mono text-text-muted">{module.paths.join(", ")}</td>
+                    <td className="text-text-secondary">{module.responsibility}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
-        </section>
-      </div>
+        </Section>
+
+        <Section title="Security">
+          <ul className="list-inside list-disc space-y-1 text-text-secondary">
+            {data.security.map((item) => <li key={item}>{item}</li>)}
+          </ul>
+        </Section>
+
+        <Section title="Environment">
+          <ul className="list-inside list-disc space-y-1 text-text-secondary">
+            {data.environment.map((item) => <li key={item}>{item}</li>)}
+          </ul>
+        </Section>
+
+        <Section title="Future Work">
+          <ul className="list-inside list-disc space-y-1 text-text-secondary">
+            {data.futureWork.map((item) => <li key={item}>{item}</li>)}
+          </ul>
+        </Section>
+
+        <p className="mt-10 border-t border-border pt-4 text-xs text-text-muted">
+          Kloudvestigate telemetry monitoring platform.
+        </p>
+      </article>
     </PageShell>
   );
 }
 
-function Info({ title, items }: { title: string; items: string[] }) {
+function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <div className="panel">
-      <h2 className="panel-title">{title}</h2>
-      <ul className="mt-3 grid gap-2 text-sm leading-6 text-body-copy">
+    <section className="mt-8 first:mt-0">
+      <h2 className="mb-3 border-b border-border pb-1 text-sm font-semibold uppercase tracking-wide text-text-muted">
+        {title}
+      </h2>
+      {children}
+    </section>
+  );
+}
+
+function InfoList({ title, items }: { title: string; items: string[] }) {
+  return (
+    <div>
+      <h3 className="mb-2 text-sm font-semibold text-text-primary">{title}</h3>
+      <ul className="list-inside list-disc space-y-1 text-text-secondary">
         {items.map((item) => <li key={item}>{item}</li>)}
       </ul>
     </div>

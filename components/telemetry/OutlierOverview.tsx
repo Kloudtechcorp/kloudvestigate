@@ -1,12 +1,12 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { ChevronDown, ChevronUp, ChevronsUpDown } from "lucide-react";
+import { ChevronDown, ChevronUp, ChevronsUpDown, Maximize2, Minimize2 } from "lucide-react";
 import type { MetricKey, RangeViolation, TelemetryAnalysis } from "@/lib/telemetry-types";
 import { formatTime } from "./utils";
 import type { MetricInvestigationAnalysis } from "./types";
 
-type AuditMode = "normal" | "full" | "hidden";
+type AuditMode = "normal" | "full";
 
 type AuditCell = {
   value: number;
@@ -42,44 +42,44 @@ export function OutlierOverview({
   const auditRows = useMemo(() => buildAuditRows(analyses), [analyses]);
   const rangeCount = analyses.reduce((count, item) => count + item.analysis.rangeViolations.length, 0);
 
-  if (mode === "hidden") {
-    return (
-      <button className="nav-pill w-fit" type="button" onClick={() => setMode("normal")}>
-        Show acceptable range audit
-      </button>
-    );
-  }
-
   const panelClass = mode === "full"
-    ? "panel fixed inset-x-4 top-4 bottom-4 z-30 overflow-hidden"
+    ? "panel fixed inset-x-4 top-16 bottom-4 z-30 overflow-hidden"
     : "panel min-w-0 overflow-hidden";
 
   return (
     <div className={panelClass}>
       <div className="flex h-full min-w-0 flex-col">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="flex flex-col gap-3 border-b border-border bg-bg-raised px-4 py-2 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h2 className="panel-title">Acceptable Range Audit</h2>
-            <p className="mt-1 text-sm text-muted-foreground">
-              One row per range-violation timestamp, with all metric readings shown and outlier cells highlighted.
-            </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <span className="status-chip">{rangeCount} range flags</span>
             <span className="status-chip">{auditRows.length} rows</span>
-            <button className="nav-pill" type="button" onClick={() => setMode("normal")}>
-              Minimize
+            <button
+              aria-label="Minimize acceptable range audit"
+              aria-pressed={mode === "normal"}
+              className={`icon-button ${mode === "normal" ? "nav-pill-active" : ""}`}
+              title="Minimize"
+              type="button"
+              onClick={() => setMode("normal")}
+            >
+              <Minimize2 aria-hidden="true" className="h-4 w-4" />
             </button>
-            <button className="nav-pill" type="button" onClick={() => setMode("full")}>
-              Expand
-            </button>
-            <button className="nav-pill" type="button" onClick={() => setMode("hidden")}>
-              Hide
+            <button
+              aria-label="Expand acceptable range audit"
+              aria-pressed={mode === "full"}
+              className={`icon-button ${mode === "full" ? "nav-pill-active" : ""}`}
+              title="Expand"
+              type="button"
+              onClick={() => setMode("full")}
+            >
+              <Maximize2 aria-hidden="true" className="h-4 w-4" />
             </button>
           </div>
         </div>
 
-        <p className="mt-3 text-sm text-muted-foreground">
+        <p className="px-4 pt-3 text-sm text-muted-foreground">
           {analyses.length > 1
             ? `Auditing ${analyses.length} metrics from the all-metric history response.`
             : analysis
@@ -114,7 +114,7 @@ function JoinedAuditTable({
   );
 
   if (!rows.length) {
-    return <p className="mt-4 text-sm text-muted-foreground">No range violations detected.</p>;
+    return <p className="px-4 py-6 text-sm italic text-text-muted">No range violations detected.</p>;
   }
 
   function setSort(nextKey: AuditSortKey) {
@@ -128,7 +128,7 @@ function JoinedAuditTable({
   }
 
   return (
-    <div className={`mt-4 min-w-0 overflow-auto ${expanded ? "min-h-0 flex-1" : "max-h-[520px]"}`}>
+    <div className={`mt-3 min-w-0 overflow-auto ${expanded ? "min-h-0 flex-1" : "max-h-[520px]"}`}>
       <table className="ops-table min-w-[1100px]">
         <thead>
           <tr>
@@ -174,7 +174,7 @@ function JoinedAuditTable({
                         </div>
                       </div>
                     ) : (
-                      <span className="text-chart-empty">-</span>
+                      <span className="text-text-muted italic">—</span>
                     )}
                   </td>
                 );

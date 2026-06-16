@@ -89,11 +89,12 @@ export async function getTelemetryMetricHistoryFromKloudtrackApi(
   config: KloudtrackEnvironment | KloudtrackEnvironmentConfig = "live",
 ): Promise<TelemetryHistoryMetricRaw> {
   const queryString = new URLSearchParams(params).toString();
-  const { path, responseKey } = resolveHistoryEndpoint(stationId, parameter);
-  const raw = await getKloudtrackApi(config).get<TelemetryHistoryMetricRaw>(`${path}?${queryString}`);
+  const raw = await getKloudtrackApi(config).get<TelemetryHistoryMetricRaw>(
+    `/telemetry/station/${stationId}/history/${parameter}?${queryString}`,
+  );
   return {
     ...raw,
-    telemetry: raw.telemetry ?? raw[responseKey] ?? [],
+    telemetry: raw.telemetry ?? [],
   };
 }
 
@@ -173,24 +174,16 @@ export function normalizeAllTelemetry(raw: TelemetryHistoryMetricRaw): {
 
 export function normalizeDashboardStations(raw: DashboardRaw): StationMetadata[] {
   const entries = Array.isArray(raw) ? raw : raw.stations;
-  return entries.map((entry) => normalizeStation(entry.station));
-}
+  const stationsById = new Map<string, StationMetadata>();
 
-function resolveHistoryEndpoint(
-  stationId: string,
-  parameter: MetricKey,
-): { path: string; responseKey: "telemetry" | "waterLevel" | "rainGauge" } {
-  if (parameter === "precipitation") {
-    return {
-      path: `/rain-gauge/station/${stationId}/history/mm`,
-      responseKey: "rainGauge",
-    };
+  for (const entry of entries) {
+    const station = normalizeStation(entry.station);
+    if (!stationsById.has(station.id)) {
+      stationsById.set(station.id, station);
+    }
   }
 
-  return {
-    path: `/telemetry/station/${stationId}/history/${parameter}`,
-    responseKey: "telemetry",
-  };
+  return [...stationsById.values()];
 }
 
 function readMetricValue(

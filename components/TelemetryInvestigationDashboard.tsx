@@ -67,6 +67,8 @@ export function TelemetryInvestigationDashboard() {
     displayedData?.source === "kloudtrack" || stationSource === "kloudtrack"
       ? "KloudTrack API"
       : "Demo fallback";
+  const selectedStation = stations.find((station) => station.id === stationId);
+  const selectedMetricLabel = metrics.find((item) => item.value === metric)?.label ?? metric;
 
   async function loadSavedBatchInvestigations(nextStations: StationMetadata[]) {
     if (!nextStations.length) return;
@@ -232,7 +234,7 @@ export function TelemetryInvestigationDashboard() {
       eyebrow="Internal telemetry intelligence"
       title="Telemetry Investigation"
     >
-      <main className="grid min-w-0 gap-4 lg:grid-cols-[320px_minmax(0,1fr)]">
+      <main className="grid min-w-0 gap-4 lg:grid-cols-[minmax(340px,380px)_minmax(0,1fr)] 2xl:grid-cols-[minmax(380px,420px)_minmax(0,1fr)]">
         <InvestigationScopePanel
           stations={stations}
           stationId={stationId}
@@ -263,38 +265,57 @@ export function TelemetryInvestigationDashboard() {
           onBatchStartChange={setBatchStart}
           onBatchEndChange={setBatchEnd}
           onBatchAggregationChange={setBatchAggregationMinutes}
+          sourceLabel={sourceLabel}
         />
 
-        <section className="grid min-w-0 gap-4">
-          <div className="panel flex min-w-0 flex-col gap-3">
-            <div className="flex items-start justify-between gap-4">
+        <section className="grid min-w-0 gap-4 self-start">
+          {quickActionRunning ? (
+            <div className="panel px-4 py-3">
+              <div className="flex items-center justify-between gap-3 text-xs text-text-muted">
+                <span className="font-mono">Fetching {quickActionCompletedStations} of {quickActionTotalStations} stations</span>
+                <span>{selectedStation?.name ?? stationId}</span>
+              </div>
+              <div className="mt-2 h-1.5 overflow-hidden rounded-[2px] bg-border">
+                <div
+                  className="h-full bg-accent"
+                  style={{ width: `${quickActionTotalStations ? (quickActionCompletedStations / quickActionTotalStations) * 100 : 0}%` }}
+                />
+              </div>
+            </div>
+          ) : null}
+          <div className="panel flex min-w-0 flex-col gap-4 overflow-hidden p-0">
+            <div className="flex items-center justify-between gap-4 border-b border-border bg-bg-raised px-4 py-3">
               <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-label">
-                  Investigation workspace
+                <h2 className="text-sm font-semibold text-text-primary">
+                  {displayedData ? `${selectedStation?.name ?? stationId} / ${selectedMetricLabel}` : "No investigation run yet"}
+                </h2>
+                <p className="mt-0.5 font-mono text-xs text-text-muted">
+                  {displayedData ? `Last run ${new Date().toLocaleString()}` : "Select a station and run an investigation."}
                 </p>
-                <h2 className="mt-1 text-xl font-semibold text-heading">Evidence first investigation workspace</h2>
               </div>
               <span className="status-chip">{sourceLabel}</span>
             </div>
-            {error ? <div className="panel border-danger-strong text-danger-foreground-muted">{error}</div> : null}
-            {quickActionError ? <div className="panel border-danger-strong text-danger-foreground-muted">{quickActionError}</div> : null}
-            <SummaryStats
-              analysis={displayedData?.analysis}
-              metricAnalyses={displayedData?.metricAnalyses}
-            />
-            <OutlierOverview analysis={displayedData?.analysis} metricAnalyses={displayedData?.metricAnalyses} />
-            <TelemetryTimeline
-              analysis={displayedData?.analysis}
-              metricAnalyses={displayedData?.metricAnalyses}
-              aggregationMinutes={displayedData?.selection.aggregationMinutes}
-              sourceLabel={sourceLabel}
-            />
-            <EventsPanel analysis={displayedData?.analysis} metricAnalyses={displayedData?.metricAnalyses} />
-            <FetchedValuesTable
-              analysis={displayedData?.analysis}
-              records={displayedData?.records ?? []}
-              metricAnalyses={displayedData?.metricAnalyses}
-            />
+            <div className="grid gap-4 px-4 pb-4">
+              {error ? <div className="border-l-4 border-danger bg-danger-bg px-4 py-3 text-sm text-danger">{error}</div> : null}
+              {quickActionError ? <div className="border-l-4 border-danger bg-danger-bg px-4 py-3 text-sm text-danger">{quickActionError}</div> : null}
+              <SummaryStats
+                analysis={displayedData?.analysis}
+                metricAnalyses={displayedData?.metricAnalyses}
+              />
+              <OutlierOverview analysis={displayedData?.analysis} metricAnalyses={displayedData?.metricAnalyses} />
+              <TelemetryTimeline
+                analysis={displayedData?.analysis}
+                metricAnalyses={displayedData?.metricAnalyses}
+                aggregationMinutes={displayedData?.selection.aggregationMinutes}
+                sourceLabel={sourceLabel}
+              />
+              <EventsPanel analysis={displayedData?.analysis} metricAnalyses={displayedData?.metricAnalyses} />
+              <FetchedValuesTable
+                analysis={displayedData?.analysis}
+                records={displayedData?.records ?? []}
+                metricAnalyses={displayedData?.metricAnalyses}
+              />
+            </div>
           </div>
         </section>
       </main>

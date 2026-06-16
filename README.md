@@ -21,7 +21,7 @@ The upstream API contract is documented in `monitorConstant.ts`.
 
 - Weather variables use `/telemetry/station/{stationId}/history/{variable}`.
 - Water level uses `/water-level/station/{stationId}/history/calculatedWaterLevel`.
-- Rainfall uses `/rain-gauge/station/{stationId}/history/mm`.
+- Metric history uses `/telemetry/station/{stationId}/history/{metric}`.
 
 Server-side requests use `KLOUDTRACK_API_BASE_URL` and `KLOUDTRACK_API_TOKEN`; the token is never exposed to the browser.
 
