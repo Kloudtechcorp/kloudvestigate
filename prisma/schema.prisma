@@ -1,0 +1,51 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Get a free hosted Postgres database in seconds: `npx create-db`
+
+generator client {
+  provider = "prisma-client"
+  output   = "../app/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum AuditType {
+  rangeViolation
+  missing
+}
+
+/// One summary row per station and date produced by a batch run.
+model DailyStationSummary {
+  id                  BigInt   @id @default(autoincrement())
+  stationId           String
+  stationName         String?
+  summaryDate         DateTime @db.Date
+  missingCount        Int      @default(0)
+  rangeViolationCount Int      @default(0)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  auditLogs StationAuditLog[]
+
+  @@unique([stationId, summaryDate])
+  @@index([summaryDate])
+}
+
+/// Range-violation entries store the exact batch row in `rowContents`.
+/// Missing entries leave `rowContents` null and only mark `eventDate`.
+model StationAuditLog {
+  id          BigInt    @id @default(autoincrement())
+  summaryId   BigInt
+  type        AuditType
+  eventDate   DateTime  @db.Date
+  rowContents Json?
+  createdAt   DateTime  @default(now())
+
+  summary DailyStationSummary @relation(fields: [summaryId], references: [id], onDelete: Cascade)
+
+  @@index([summaryId, type])
+  @@index([eventDate])
+}
