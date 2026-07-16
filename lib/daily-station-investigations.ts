@@ -175,6 +175,21 @@ async function storeReport(
       };
     }),
   );
+  const missingLogs = analyses
+    .filter((item) => item.analysis.missingPeriods.length > 0)
+    .map((item) => ({
+      type: "missing" as const,
+      eventDate: summaryDate,
+      rowContents: {
+        metric: item.metric,
+        missingCount: item.analysis.summary.missingRecordCount,
+        periods: item.analysis.missingPeriods.map((period) => ({
+          start: period.start,
+          end: period.end,
+          missingCount: period.missingCount,
+        })),
+      } satisfies Prisma.InputJsonObject,
+    }));
 
   const createData = {
     stationId: investigation.station.id,
@@ -186,7 +201,8 @@ async function storeReport(
     auditLogs: {
       create: [
         ...rangeViolationLogs,
-        ...(missingCount > 0 ? [{ type: "missing" as const, eventDate: summaryDate }] : []),
+        ...missingLogs,
+        ...(missingCount > 0 && missingLogs.length === 0 ? [{ type: "missing" as const, eventDate: summaryDate }] : []),
       ],
     },
   };

@@ -45,6 +45,7 @@ async function getMonthlySummaries(month: string, stationId?: string) {
       },
       select: {
         stationId: true,
+        stationName: true,
         summaryDate: true,
         missingCount: true,
         rangeViolationCount: true,
@@ -58,18 +59,36 @@ async function getMonthlySummaries(month: string, stationId?: string) {
     }),
   ]);
 
-  const totalsByDate = new Map<string, { missingCount: number; rangeViolationCount: number }>();
+  const totalsByDate = new Map<string, {
+    missingCount: number;
+    rangeViolationCount: number;
+    rangeViolationStations: Map<string, string>;
+  }>();
   for (const row of rows) {
     const date = toDateKey(row.summaryDate);
-    const total = totalsByDate.get(date) ?? { missingCount: 0, rangeViolationCount: 0 };
+    const total = totalsByDate.get(date) ?? {
+      missingCount: 0,
+      rangeViolationCount: 0,
+      rangeViolationStations: new Map<string, string>(),
+    };
     total.missingCount += row.missingCount;
     total.rangeViolationCount += row.rangeViolationCount;
+    if (row.rangeViolationCount > 0) {
+      total.rangeViolationStations.set(row.stationId, row.stationName ?? row.stationId);
+    }
     totalsByDate.set(date, total);
   }
 
   return Response.json({
     month,
-    summaries: [...totalsByDate].map(([date, totals]) => ({ date, ...totals })),
+    summaries: [...totalsByDate].map(([date, totals]) => ({
+      date,
+      missingCount: totals.missingCount,
+      rangeViolationCount: totals.rangeViolationCount,
+      rangeViolationStations: [...totals.rangeViolationStations]
+        .map(([id, name]) => ({ id, name }))
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    })),
     stations: stationRows.map((station) => ({
       id: station.stationId,
       name: station.stationName ?? station.stationId,

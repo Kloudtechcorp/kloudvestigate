@@ -7,6 +7,7 @@ type CalendarSummary = {
   date: string;
   missingCount: number;
   rangeViolationCount: number;
+  rangeViolationStations: StationOption[];
 };
 
 type StationOption = { id: string; name: string };
@@ -222,7 +223,7 @@ export function AuditCalendarWorkspace() {
             >
               <RefreshCw className={`h-4 w-4 ${rebuildLoading ? "animate-spin" : ""}`} aria-hidden="true" />
               {rebuildLoading
-                ? `Rebuilding ${rebuildProgress?.completed ?? 0}/${rebuildProgress?.total || "…"}`
+                ? `Rebuilding ${rebuildProgress?.completed ?? 0}/${rebuildProgress?.total || "..."}`
                 : "Rebuild selected date"}
             </button>
           </div>
@@ -235,7 +236,7 @@ export function AuditCalendarWorkspace() {
             <div className="flex items-center justify-between gap-3 text-xs text-text-secondary">
               <span className="truncate">{rebuildProgress.stationName}</span>
               <span className="shrink-0 font-mono">
-                {rebuildProgress.completed}/{rebuildProgress.total || "…"} stations
+                {rebuildProgress.completed}/{rebuildProgress.total || "..."} stations
               </span>
             </div>
             <div className="mt-2 h-1.5 overflow-hidden rounded-[2px] bg-border">
@@ -275,6 +276,23 @@ export function AuditCalendarWorkspace() {
                   <span className="mt-3 flex flex-col items-start gap-1">
                     {summary?.missingCount ? <span className="count-chip">{summary.missingCount} missing</span> : null}
                     {summary?.rangeViolationCount ? <span className="count-chip count-chip-danger">{summary.rangeViolationCount} out of range</span> : null}
+                    {summary?.rangeViolationStations.slice(0, 2).map((station) => (
+                      <span
+                        className="mini-chip mini-chip-danger text-xs max-w-full truncate normal-case tracking-normal"
+                        key={station.id}
+                        title={`${station.name} has range violations`}
+                      >
+                        {station.name}
+                      </span>
+                    ))}
+                    {summary && summary.rangeViolationStations.length > 2 ? (
+                      <span
+                        className="mini-chip mini-chip-danger text-xs"
+                        title={summary.rangeViolationStations.slice(2).map((station) => station.name).join(", ")}
+                      >
+                        +{summary.rangeViolationStations.length - 2} stations
+                      </span>
+                    ) : null}
                     {!summary && day.date && !summaryLoading ? <span className="text-[11px] text-text-muted">No report</span> : null}
                   </span>
                 </button>
@@ -287,7 +305,7 @@ export function AuditCalendarWorkspace() {
       {!selectedDate ? (
         <div className="panel py-8 text-center text-sm text-text-secondary">Select a calendar date to load audit details.</div>
       ) : detailLoading ? (
-        <div className="panel py-8 text-center text-sm text-text-secondary">Loading {formatDate(selectedDate)} audits…</div>
+        <div className="panel py-8 text-center text-sm text-text-secondary">Loading {formatDate(selectedDate)} audits...</div>
       ) : (
         <>
           <StationDateSummary date={selectedDate} summaries={dailySummaries} />
@@ -334,7 +352,7 @@ function StationDateSummary({ date, summaries }: { date: string; summaries: Dail
                           </span>
                         ))}
                       </span>
-                    ) : <span className="text-text-muted">—</span>}
+                    ) : <span className="text-text-muted">-</span>}
                   </td>
                   <td>
                     <span className={issueCount ? "count-chip count-chip-caution" : "count-chip"}>
@@ -363,6 +381,7 @@ function AuditDetails({
   missingRows: DailySummary[];
 }) {
   const [tableMode, setTableMode] = useState<"normal" | "full">("normal");
+  const pivotedAudit = useMemo(() => buildRangeViolationPivot(rangeRows), [rangeRows]);
   const tablePanelClass = tableMode === "full"
     ? "panel fixed inset-x-4 top-16 bottom-4 z-30 overflow-hidden p-0"
     : "panel min-w-0 overflow-hidden p-0";
@@ -374,10 +393,11 @@ function AuditDetails({
         <div className="flex flex-col gap-2 border-b border-border px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h2 className="panel-title">Acceptable Range Audit</h2>
-            <p className="mt-1 text-xs text-text-secondary">Exact violating rows recorded for {formatDate(date)}.</p>
+            <p className="mt-1 text-xs text-text-secondary">Violations grouped by station and recorded timestamp for {formatDate(date)}.</p>
           </div>
           <div className="flex items-center gap-2">
-            <span className="count-chip count-chip-danger">{rangeRows.length} rows</span>
+            <span className="count-chip count-chip-danger">{rangeRows.length} violations</span>
+            <span className="count-chip">{pivotedAudit.rows.length} timestamps</span>
             <button
               aria-label="Minimize acceptable range audit"
               aria-pressed={tableMode === "normal"}
@@ -402,20 +422,38 @@ function AuditDetails({
         </div>
         <div className={`min-w-0 overflow-auto ${tableMode === "full" ? "min-h-0 flex-1" : "max-h-[440px]"}`}>
           <table className="ops-table">
-            <thead><tr><th className="sticky top-0 z-10">Station</th><th className="sticky top-0 z-10">Metric</th><th className="sticky top-0 z-10">Timestamp</th><th className="sticky top-0 z-10">Value</th><th className="sticky top-0 z-10">Stored row</th></tr></thead>
+            <thead>
+              <tr>
+                <th className="sticky top-0 z-10">Station</th>
+                <th className="sticky top-0 z-10">Timestamp</th>
+                {pivotedAudit.metrics.map((metric) => (
+                  <th className="sticky top-0 z-10" key={metric}>{formatMetricLabel(metric)}</th>
+                ))}
+              </tr>
+            </thead>
             <tbody>
-              {rangeRows.length ? rangeRows.map((row) => {
-                const contents = readRowContents(row.rowContents);
+              {pivotedAudit.rows.length ? pivotedAudit.rows.map((row) => {
                 return (
-                  <tr key={row.id}>
+                  <tr key={row.key}>
                     <td><span className="font-medium text-text-primary">{row.stationName}</span><br /><span className="font-mono text-xs text-text-muted">{row.stationId}</span></td>
-                    <td>{contents.metric ?? "—"}</td>
-                    <td className="font-mono">{contents.timestamp ? formatTimestamp(contents.timestamp) : "—"}</td>
-                    <td className="font-mono text-danger">{contents.value ?? "—"}</td>
-                    <td><code className="block max-w-xl whitespace-pre-wrap break-all text-xs text-text-secondary">{JSON.stringify(row.rowContents)}</code></td>
+                    <td className="font-mono">{row.timestamp ? formatTimestamp(row.timestamp) : "-"}</td>
+                    {pivotedAudit.metrics.map((metric) => {
+                      const cell = row.values[metric];
+                      return (
+                        <td className="font-mono" key={metric}>
+                          {cell ? (
+                            <span className="text-danger" title={JSON.stringify(cell.rowContents)}>
+                              {cell.value ?? "-"}
+                            </span>
+                          ) : (
+                            <span className="text-text-muted">-</span>
+                          )}
+                        </td>
+                      );
+                    })}
                   </tr>
                 );
-              }) : <tr><td colSpan={5} className="py-8 text-center text-text-muted">No acceptable-range violations recorded.</td></tr>}
+              }) : <tr><td colSpan={pivotedAudit.metrics.length + 2} className="py-8 text-center text-text-muted">No acceptable-range violations recorded.</td></tr>}
             </tbody>
           </table>
         </div>
@@ -450,6 +488,49 @@ function readRowContents(value: unknown): { metric?: string; timestamp?: string;
     metric: typeof row.metric === "string" ? row.metric : undefined,
     timestamp: typeof row.timestamp === "string" ? row.timestamp : undefined,
     value: typeof row.value === "number" ? row.value : undefined,
+  };
+}
+
+function buildRangeViolationPivot(rangeRows: Array<AuditLog & { stationId: string; stationName: string }>) {
+  type PivotCell = { value?: number; rowContents: unknown };
+  type PivotRow = {
+    key: string;
+    stationId: string;
+    stationName: string;
+    timestamp?: string;
+    values: Record<string, PivotCell>;
+  };
+
+  const metrics = new Set<string>();
+  const rows = new Map<string, PivotRow>();
+
+  for (const audit of rangeRows) {
+    const contents = readRowContents(audit.rowContents);
+    const metric = contents.metric ?? "unknown";
+    const rowKey = `${audit.stationId}:${contents.timestamp ?? audit.id}`;
+    const existing = rows.get(rowKey);
+    const pivotRow = existing ?? {
+      key: rowKey,
+      stationId: audit.stationId,
+      stationName: audit.stationName,
+      timestamp: contents.timestamp,
+      values: {},
+    };
+
+    metrics.add(metric);
+    pivotRow.values[metric] = { value: contents.value, rowContents: audit.rowContents };
+    rows.set(rowKey, pivotRow);
+  }
+
+  return {
+    metrics: Array.from(metrics).sort((a, b) => formatMetricLabel(a).localeCompare(formatMetricLabel(b))),
+    rows: Array.from(rows.values()).sort((a, b) => {
+      const stationSort = a.stationName.localeCompare(b.stationName);
+      if (stationSort) return stationSort;
+      const aTime = a.timestamp ? Date.parse(a.timestamp) : Number.MAX_SAFE_INTEGER;
+      const bTime = b.timestamp ? Date.parse(b.timestamp) : Number.MAX_SAFE_INTEGER;
+      return aTime - bTime;
+    }),
   };
 }
 
