@@ -17,6 +17,7 @@ export type PageNavLink = {
 const NAV_LINKS: PageNavLink[] = [
   { href: "/", label: "Dashboard" },
   { href: "/pubmat", label: "Daily Readings" },
+  { href: "/audit", label: "Audit" },
   { href: "/config", label: "Config" },
   { href: "/architecture", label: "Architecture" },
 ];

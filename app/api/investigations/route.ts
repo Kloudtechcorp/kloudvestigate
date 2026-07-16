@@ -104,6 +104,7 @@ export async function POST(request: Request) {
     const body = (await request.json()) as Partial<InvestigationSelection> & {
       pointTimestamp?: string;
       useDemoData?: boolean;
+      bypassCache?: boolean;
     };
 
     const metricRangeOverrides = await readMetricRangeOverridesFromCookies();
@@ -111,7 +112,7 @@ export async function POST(request: Request) {
     const cacheVariant = buildInvestigationCacheVariant(metricRangeOverrides, kloudtrackConfig.environment);
     const requestedDemoData = body.useDemoData ?? false;
     const selection = parseSelection(body);
-    const canUseCache = !body.pointTimestamp;
+    const canUseCache = !body.pointTimestamp && !body.bypassCache;
     const cached = canUseCache
       ? await readServerInvestigationCache(selection, cacheVariant)
       : null;
