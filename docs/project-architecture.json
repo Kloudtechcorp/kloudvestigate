@@ -7,8 +7,8 @@
   },
   "runtime": {
     "client": [
-      "app/page.tsx renders the main investigation dashboard shell.",
-      "app/pubmat/page.tsx renders the publication-material workflow shell.",
+      "app/(protected)/layout.tsx verifies the internal access cookie before rendering protected app pages.",
+      "app/(protected)/page.tsx and app/(protected)/pubmat/page.tsx render the main dashboard and publication-material workflow at / and /pubmat.",
       "components/telemetry/* contains client dashboards, forms, tables, charts, and station aggregate workflows.",
       "components/architecture/MermaidDiagram.tsx is the browser-only Mermaid renderer used by the architecture page."
     ],
@@ -42,10 +42,11 @@
     }
   ],
   "security": [
-    "assertInternalAccess checks INTERNAL_ACCESS_TOKEN in production-like environments.",
+    "INTERNAL_ACCESS_TOKEN acts as the shared internal password and signs the httpOnly access cookie.",
+    "assertInternalAccess accepts the signed cookie or legacy Bearer/x-internal-access-token headers for route-handler APIs.",
     "KloudTrack API keys are read only in server modules and route handlers.",
     "writeAuditEvent currently emits structured audit JSON to console.",
-    "Production should run behind SSO or VPN and configure INTERNAL_ACCESS_TOKEN."
+    "Production must configure INTERNAL_ACCESS_TOKEN; missing configuration returns setup errors instead of allowing public access."
   ],
   "dataFlow": [
     "Operator selects station, metric, time range, and interval.",
@@ -67,7 +68,7 @@
       "id": "client-architecture",
       "title": "Client Architecture",
       "description": "Server pages keep shells light, while focused client components own stateful investigation, publication, table, chart, and Mermaid interactions.",
-      "mermaid": "flowchart TD\n  Layout[app/layout.tsx] --> Home[app/page.tsx]\n  Layout --> Pubmat[app/pubmat/page.tsx]\n  Layout --> Architecture[app/architecture/page.tsx]\n  Home --> Dashboard[TelemetryInvestigationDashboard]\n  Pubmat --> Workspace[PubmatWorkspace]\n  Workspace --> QuickFetch[PubmatQuickFetch]\n  QuickFetch --> Values[FetchedValuesTable]\n  Dashboard --> Summary[SummaryStats]\n  Dashboard --> Timeline[TelemetryTimeline]\n  Dashboard --> Events[EventsPanel]\n  Architecture --> Mermaid[MermaidDiagram client island]"
+      "mermaid": "flowchart TD\n  Layout[app/layout.tsx] --> Protected[app/(protected)/layout.tsx]\n  Layout --> Login[app/login/page.tsx]\n  Protected --> Home[app/(protected)/page.tsx]\n  Protected --> Pubmat[app/(protected)/pubmat/page.tsx]\n  Protected --> Architecture[app/(protected)/architecture/page.tsx]\n  Home --> Dashboard[TelemetryInvestigationDashboard]\n  Pubmat --> Workspace[PubmatWorkspace]\n  Workspace --> QuickFetch[PubmatQuickFetch]\n  QuickFetch --> Values[FetchedValuesTable]\n  Dashboard --> Summary[SummaryStats]\n  Dashboard --> Timeline[TelemetryTimeline]\n  Dashboard --> Events[EventsPanel]\n  Architecture --> Mermaid[MermaidDiagram client island]"
     },
     {
       "id": "response-strategy",
@@ -80,7 +81,7 @@
     "KLOUDTRACK_API_BASE_URL defaults to https://api.kloudtechsea.com/api/v1.",
     "KLOUDTRACK_API_TOKEN enables real upstream telemetry; absence uses demo data in current flows.",
     "BETA_KLOUDTRACK_API_TOKEN enables the beta KloudTrack environment.",
-    "INTERNAL_ACCESS_TOKEN guards internal API access when configured or in production."
+    "INTERNAL_ACCESS_TOKEN enables the shared login gate, signs the internal access cookie, and guards APIs when configured or in production."
   ],
   "futureWork": [
     "Add automated tests around metric endpoint resolution, bucket windows, and investigation payload shape."

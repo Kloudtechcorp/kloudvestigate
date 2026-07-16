@@ -4,7 +4,8 @@ import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
-import { Menu, MoreHorizontal } from "lucide-react";
+import { Menu } from "lucide-react";
+import { LogoutButton } from "@/components/auth/LogoutButton";
 import { ThemeToggleButton } from "@/components/theme/ThemeToggleButton";
 import { KloudtrackEnvironmentSwitch } from "@/components/telemetry/KloudtrackEnvironmentSwitch";
 
@@ -120,9 +121,7 @@ function AppTopbar() {
         <div className="ml-auto flex items-center gap-2">
           <KloudtrackEnvironmentSwitch />
           <ThemeToggleButton />
-          <button className="icon-button hidden md:inline-flex" type="button" aria-label="More options" title="More options">
-            <MoreHorizontal aria-hidden="true" className="h-4 w-4" />
-          </button>
+          <LogoutButton />
         </div>
       </div>
     </header>
