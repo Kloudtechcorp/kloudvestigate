@@ -23,6 +23,7 @@ type DailySummary = {
   stationName: string;
   missingCount: number;
   rangeViolationCount: number;
+  rangeViolationSummary: unknown;
   auditLogs: AuditLog[];
 };
 
@@ -33,6 +34,12 @@ type MonthlyResponse = {
 };
 
 type DailyResponse = { date: string; summaries: DailySummary[] };
+
+type RebuildProgress = {
+  completed: number;
+  total: number;
+  stationName: string;
+};
 
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
@@ -47,6 +54,7 @@ export function AuditCalendarWorkspace() {
   const [summaryLoading, setSummaryLoading] = useState(true);
   const [detailLoading, setDetailLoading] = useState(false);
   const [rebuildLoading, setRebuildLoading] = useState(false);
+  const [rebuildProgress, setRebuildProgress] = useState<RebuildProgress | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -149,26 +157,26 @@ export function AuditCalendarWorkspace() {
     )) return;
 
     setRebuildLoading(true);
+    setRebuildProgress({ completed: 0, total: stationId ? 1 : 0, stationName: "Loading stations" });
     setError(null);
     setNotice(null);
 
     try {
       const response = await fetch("/api/audit-reports/run", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/x-ndjson",
+        },
         body: JSON.stringify({ date: selectedDate, stationId: stationId || undefined }),
       });
-      const payload = await response.json() as {
-        message?: string;
-        stationCount?: number;
-        reports?: Array<{ status: string }>;
-      };
-      if (!response.ok) throw new Error(payload.message ?? `Rebuild failed (${response.status})`);
+      if (!response.ok) throw new Error(`Rebuild failed (${response.status})`);
+      const result = await consumeRebuildStream(response, setRebuildProgress);
+      if (result.failedCount > 0) {
+        throw new Error(`${result.failedCount} station rebuilds failed; their existing reports were preserved.`);
+      }
 
-      const failedCount = payload.reports?.filter((report) => report.status === "failed").length ?? 0;
-      if (failedCount > 0) throw new Error(`${failedCount} station rebuilds failed; their existing reports were preserved.`);
-
-      setNotice(`Rebuilt ${payload.stationCount ?? 0} station report${payload.stationCount === 1 ? "" : "s"} for ${formatDate(selectedDate)}.`);
+      setNotice(`Rebuilt ${result.stationCount} station report${result.stationCount === 1 ? "" : "s"} for ${formatDate(selectedDate)}.`);
       setSummaryLoading(true);
       setDetailLoading(true);
       setRefreshKey((current) => current + 1);
@@ -176,6 +184,7 @@ export function AuditCalendarWorkspace() {
       setError(requestError instanceof Error ? requestError.message : "Unable to rebuild the selected date.");
     } finally {
       setRebuildLoading(false);
+      setRebuildProgress(null);
     }
   }
 
@@ -212,13 +221,35 @@ export function AuditCalendarWorkspace() {
               type="button"
             >
               <RefreshCw className={`h-4 w-4 ${rebuildLoading ? "animate-spin" : ""}`} aria-hidden="true" />
-              {rebuildLoading ? "Rebuilding" : "Rebuild selected date"}
+              {rebuildLoading
+                ? `Rebuilding ${rebuildProgress?.completed ?? 0}/${rebuildProgress?.total || "…"}`
+                : "Rebuild selected date"}
             </button>
           </div>
         </div>
 
         {error ? <p className="border-b border-danger bg-danger-bg px-4 py-3 text-sm text-danger">{error}</p> : null}
         {notice ? <p className="border-b border-success bg-success-bg px-4 py-3 text-sm text-success">{notice}</p> : null}
+        {rebuildLoading && rebuildProgress ? (
+          <div className="border-b border-border bg-bg-raised px-4 py-3">
+            <div className="flex items-center justify-between gap-3 text-xs text-text-secondary">
+              <span className="truncate">{rebuildProgress.stationName}</span>
+              <span className="shrink-0 font-mono">
+                {rebuildProgress.completed}/{rebuildProgress.total || "…"} stations
+              </span>
+            </div>
+            <div className="mt-2 h-1.5 overflow-hidden rounded-[2px] bg-border">
+              <div
+                className="h-full bg-accent transition-[width] duration-200"
+                style={{
+                  width: `${rebuildProgress.total
+                    ? (rebuildProgress.completed / rebuildProgress.total) * 100
+                    : 0}%`,
+                }}
+              />
+            </div>
+          </div>
+        ) : null}
 
         <div className="overflow-x-auto p-3">
           <div className="grid min-w-[760px] grid-cols-7 border-l border-t border-border">
@@ -280,11 +311,12 @@ function StationDateSummary({ date, summaries }: { date: string; summaries: Dail
       <div className="overflow-x-auto">
         <table className="ops-table">
           <thead>
-            <tr><th>Station</th><th>Missing records</th><th>Out of range</th><th>Status</th></tr>
+            <tr><th>Station</th><th>Missing records</th><th>Out of range</th><th>Range violations by metric</th><th>Status</th></tr>
           </thead>
           <tbody>
             {summaries.length ? summaries.map((summary) => {
               const issueCount = summary.missingCount + summary.rangeViolationCount;
+              const violationsByMetric = readRangeViolationSummary(summary.rangeViolationSummary);
               return (
                 <tr key={summary.stationId}>
                   <td>
@@ -294,6 +326,17 @@ function StationDateSummary({ date, summaries }: { date: string; summaries: Dail
                   <td><span className={summary.missingCount ? "count-chip" : "text-text-muted"}>{summary.missingCount}</span></td>
                   <td><span className={summary.rangeViolationCount ? "count-chip count-chip-danger" : "text-text-muted"}>{summary.rangeViolationCount}</span></td>
                   <td>
+                    {violationsByMetric.length ? (
+                      <span className="flex flex-wrap gap-1">
+                        {violationsByMetric.map(({ metric, count }) => (
+                          <span className="count-chip count-chip-danger" key={metric}>
+                            {formatMetricLabel(metric)} {count}
+                          </span>
+                        ))}
+                      </span>
+                    ) : <span className="text-text-muted">—</span>}
+                  </td>
+                  <td>
                     <span className={issueCount ? "count-chip count-chip-caution" : "count-chip"}>
                       {issueCount ? "Attention" : "Clear"}
                     </span>
@@ -301,7 +344,7 @@ function StationDateSummary({ date, summaries }: { date: string; summaries: Dail
                 </tr>
               );
             }) : (
-              <tr><td colSpan={4} className="py-8 text-center text-text-muted">No station summaries recorded for this date.</td></tr>
+              <tr><td colSpan={5} className="py-8 text-center text-text-muted">No station summaries recorded for this date.</td></tr>
             )}
           </tbody>
         </table>
@@ -410,6 +453,19 @@ function readRowContents(value: unknown): { metric?: string; timestamp?: string;
   };
 }
 
+function readRangeViolationSummary(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+
+  return Object.entries(value)
+    .filter((entry): entry is [string, number] => typeof entry[1] === "number" && entry[1] > 0)
+    .map(([metric, count]) => ({ metric, count }))
+    .sort((a, b) => b.count - a.count || a.metric.localeCompare(b.metric));
+}
+
+function formatMetricLabel(metric: string) {
+  return metric.replace(/([a-z])([A-Z])/g, "$1 $2").replace(/^./, (letter) => letter.toUpperCase());
+}
+
 function buildCalendarDays(monthKey: string) {
   const [year, month] = monthKey.split("-").map(Number);
   const firstWeekday = new Date(Date.UTC(year, month - 1, 1)).getUTCDay();
@@ -460,6 +516,52 @@ function formatTimestamp(timestamp: string) {
     timeStyle: "short",
     timeZone: "Asia/Manila",
   }).format(new Date(timestamp));
+}
+
+async function consumeRebuildStream(
+  response: Response,
+  onProgress: (progress: RebuildProgress) => void,
+) {
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error("Rebuild response did not provide a readable progress stream.");
+
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let stationCount = 0;
+  let failedCount = 0;
+
+  function processLine(line: string) {
+    if (!line.trim()) return;
+    const event = JSON.parse(line) as Record<string, unknown>;
+    const eventName = typeof event.event === "string" ? event.event : "";
+    const total = typeof event.stationCount === "number" ? event.stationCount : stationCount;
+    const completed = typeof event.completedCount === "number" ? event.completedCount : 0;
+    const stationName = typeof event.stationName === "string" ? event.stationName : "Preparing stations";
+    stationCount = total;
+
+    if (eventName === "init") {
+      onProgress({ completed: 0, total, stationName: "Preparing station investigations" });
+    } else if (eventName === "station_start") {
+      onProgress({ completed, total, stationName: `Rebuilding ${stationName}` });
+    } else if (eventName === "result") {
+      if (event.status === "failed") failedCount += 1;
+      onProgress({ completed, total, stationName: `${stationName} complete` });
+    } else if (eventName === "error") {
+      throw new Error(typeof event.message === "string" ? event.message : "Rebuild stream failed.");
+    }
+  }
+
+  while (true) {
+    const { done, value } = await reader.read();
+    buffer += decoder.decode(value, { stream: !done });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+    for (const line of lines) processLine(line);
+    if (done) break;
+  }
+  if (buffer.trim()) processLine(buffer);
+
+  return { stationCount, failedCount };
 }
 
 function useHydrated() {

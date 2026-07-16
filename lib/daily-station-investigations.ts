@@ -10,6 +10,16 @@ type RunDailyStationInvestigationsOptions = {
   dateKey: string;
   stationId?: string;
   replaceExisting: boolean;
+  onInit?: (event: { stationCount: number }) => void | Promise<void>;
+  onStationStart?: (event: StationProgressEvent) => void | Promise<void>;
+  onStationComplete?: (event: StationProgressEvent & { status: string }) => void | Promise<void>;
+};
+
+type StationProgressEvent = {
+  stationId: string;
+  stationName: string;
+  completedCount: number;
+  stationCount: number;
 };
 
 export async function runDailyStationInvestigations({
@@ -17,6 +27,9 @@ export async function runDailyStationInvestigations({
   dateKey,
   stationId,
   replaceExisting,
+  onInit,
+  onStationStart,
+  onStationComplete,
 }: RunDailyStationInvestigationsOptions) {
   const scope = getPhilippineDayScope(dateKey);
   if (!scope) throw new Error("Date must use YYYY-MM-DD format.");
@@ -33,13 +46,29 @@ export async function runDailyStationInvestigations({
     ? stationPayload.stations.filter((station) => station.id === stationId)
     : stationPayload.stations;
   if (stationId && stations.length === 0) throw new Error(`Station ${stationId} was not found.`);
+  await onInit?.({ stationCount: stations.length });
 
   const reports = [];
   for (const [index, station] of stations.entries()) {
+    await onStationStart?.({
+      stationId: station.id,
+      stationName: station.name,
+      completedCount: index,
+      stationCount: stations.length,
+    });
+
     if (!replaceExisting) {
       const existing = await loadStoredReport(station.id, scope.summaryDate);
       if (existing) {
-        reports.push({ stationId: station.id, status: "stored", report: existing });
+        const result = { stationId: station.id, status: "stored", report: existing };
+        reports.push(result);
+        await onStationComplete?.({
+          stationId: station.id,
+          stationName: station.name,
+          completedCount: index + 1,
+          stationCount: stations.length,
+          status: result.status,
+        });
         continue;
       }
     }
@@ -66,6 +95,14 @@ export async function runDailyStationInvestigations({
       const report = await storeReport(investigation, scope.summaryDate, replaceExisting);
       reports.push({ stationId: station.id, status: replaceExisting ? "replaced" : "created", report });
     }
+
+    await onStationComplete?.({
+      stationId: station.id,
+      stationName: station.name,
+      completedCount: index + 1,
+      stationCount: stations.length,
+      status: reports.at(-1)?.status ?? "failed",
+    });
 
     if (index < stations.length - 1) await wait(REQUEST_GAP_MS);
   }
@@ -120,6 +157,11 @@ async function storeReport(
     (total, item) => total + item.analysis.rangeViolations.length,
     0,
   );
+  const rangeViolationSummary = Object.fromEntries(
+    analyses
+      .map((item) => [item.metric, item.analysis.rangeViolations.length] as const)
+      .filter(([, count]) => count > 0),
+  ) satisfies Prisma.InputJsonObject;
   const rangeViolationLogs = analyses.flatMap((item) =>
     item.analysis.rangeViolations.map((violation) => {
       const row = item.records.find((record) => record.timestamp === violation.timestamp);
@@ -140,6 +182,7 @@ async function storeReport(
     summaryDate,
     missingCount,
     rangeViolationCount,
+    rangeViolationSummary,
     auditLogs: {
       create: [
         ...rangeViolationLogs,

@@ -93,6 +93,7 @@ async function getDailyAudit(date: string, stationId?: string) {
       stationName: true,
       missingCount: true,
       rangeViolationCount: true,
+      rangeViolationSummary: true,
       auditLogs: {
         select: {
           id: true,
@@ -113,6 +114,7 @@ async function getDailyAudit(date: string, stationId?: string) {
       stationName: summary.stationName ?? summary.stationId,
       missingCount: summary.missingCount,
       rangeViolationCount: summary.rangeViolationCount,
+      rangeViolationSummary: summary.rangeViolationSummary,
       auditLogs: summary.auditLogs.map((log) => ({
         id: log.id.toString(),
         type: log.type,

@@ -19,14 +19,15 @@ enum AuditType {
 
 /// One summary row per station and date produced by a batch run.
 model DailyStationSummary {
-  id                  BigInt   @id @default(autoincrement())
-  stationId           String
-  stationName         String?
-  summaryDate         DateTime @db.Date
-  missingCount        Int      @default(0)
-  rangeViolationCount Int      @default(0)
-  createdAt           DateTime @default(now())
-  updatedAt           DateTime @updatedAt
+  id                    BigInt   @id @default(autoincrement())
+  stationId             String
+  stationName           String?
+  summaryDate           DateTime @db.Date
+  missingCount          Int      @default(0)
+  rangeViolationCount   Int      @default(0)
+  rangeViolationSummary Json     @default("{}")
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
 
   auditLogs StationAuditLog[]
 
