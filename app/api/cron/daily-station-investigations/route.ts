@@ -11,13 +11,17 @@ export async function GET(request: Request) {
   const denied = authorizeCron(request);
   if (denied) return denied;
 
+  const dateKey = getPreviousPhilippineDateKey();
+
   try {
     return Response.json(await runDailyStationInvestigations({
       requestUrl: request.url,
-      dateKey: getPreviousPhilippineDateKey(),
+      dateKey,
       replaceExisting: false,
     }));
   } catch (error) {
+    console.error(`Daily station investigation failed for ${dateKey}.`, error);
+
     return Response.json(
       {
         error: "Daily station investigation failed",
