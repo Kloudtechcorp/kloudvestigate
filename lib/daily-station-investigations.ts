@@ -4,6 +4,8 @@ import { prisma } from "@/lib/prisma";
 
 const PHT_OFFSET_MS = 8 * 60 * 60_000;
 const REQUEST_GAP_MS = 600;
+const REPORT_TRANSACTION_MAX_WAIT_MS = 10_000;
+const REPORT_TRANSACTION_TIMEOUT_MS = 30_000;
 
 type RunDailyStationInvestigationsOptions = {
   requestUrl: string;
@@ -191,37 +193,59 @@ async function storeReport(
       } satisfies Prisma.InputJsonObject,
     }));
 
-  const createData = {
+  const summaryData = {
     stationId: investigation.station.id,
     stationName: investigation.station.name,
     summaryDate,
     missingCount,
     rangeViolationCount,
     rangeViolationSummary,
-    auditLogs: {
-      create: [
-        ...rangeViolationLogs,
-        ...missingLogs,
-        ...(missingCount > 0 && missingLogs.length === 0 ? [{ type: "missing" as const, eventDate: summaryDate }] : []),
-      ],
-    },
   };
+  const auditLogs = [
+    ...rangeViolationLogs,
+    ...missingLogs,
+    ...(missingCount > 0 && missingLogs.length === 0
+      ? [{ type: "missing" as const, eventDate: summaryDate }]
+      : []),
+  ];
 
   try {
-    const report = replaceExisting
-      ? await prisma.$transaction(async (transaction) => {
+    if (replaceExisting) {
+      await prisma.$transaction(
+        async (transaction) => {
           await transaction.dailyStationSummary.deleteMany({
             where: { stationId: investigation.station.id, summaryDate },
           });
-          return transaction.dailyStationSummary.create({
-            data: createData,
-            include: { auditLogs: true },
+
+          const summary = await transaction.dailyStationSummary.create({
+            data: summaryData,
           });
-        })
-      : await prisma.dailyStationSummary.create({
-          data: createData,
-          include: { auditLogs: true },
-        });
+
+          if (auditLogs.length > 0) {
+            await transaction.stationAuditLog.createMany({
+              data: auditLogs.map((log) => ({
+                ...log,
+                summaryId: summary.id,
+              })),
+            });
+          }
+        },
+        {
+          maxWait: REPORT_TRANSACTION_MAX_WAIT_MS,
+          timeout: REPORT_TRANSACTION_TIMEOUT_MS,
+        },
+      );
+
+      return loadStoredReport(investigation.station.id, summaryDate);
+    }
+
+    const report = await prisma.dailyStationSummary.create({
+      data: {
+        ...summaryData,
+        auditLogs: { create: auditLogs },
+      },
+      include: { auditLogs: true },
+    });
 
     return serializeReport(report);
   } catch (error) {
