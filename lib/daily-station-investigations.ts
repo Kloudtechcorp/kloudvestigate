@@ -279,8 +279,19 @@ function serializeReport(report: NonNullable<Awaited<ReturnType<typeof prisma.da
 }
 
 function buildInternalRequestHeaders(): Record<string, string> {
-  const token = process.env.INTERNAL_ACCESS_TOKEN?.trim();
-  return token ? { "x-internal-access-token": token } : {};
+  const headers: Record<string, string> = {};
+  const internalAccessToken = process.env.INTERNAL_ACCESS_TOKEN?.trim();
+  const vercelAutomationBypassSecret =
+    process.env.VERCEL_AUTOMATION_BYPASS_SECRET?.trim();
+
+  if (internalAccessToken) {
+    headers["x-internal-access-token"] = internalAccessToken;
+  }
+  if (vercelAutomationBypassSecret) {
+    headers["x-vercel-protection-bypass"] = vercelAutomationBypassSecret;
+  }
+
+  return headers;
 }
 
 function wait(ms: number) {
