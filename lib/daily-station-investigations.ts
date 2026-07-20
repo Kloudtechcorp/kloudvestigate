@@ -43,7 +43,10 @@ export async function runDailyStationInvestigations({
   });
   if (!stationsResponse.ok) throw new Error(`Station lookup failed (${stationsResponse.status}).`);
 
-  const stationPayload = (await stationsResponse.json()) as StationsResponse;
+  const stationPayload = await readJsonResponse<StationsResponse>(
+    stationsResponse,
+    "Station lookup",
+  );
   const stations = stationId
     ? stationPayload.stations.filter((station) => station.id === stationId)
     : stationPayload.stations;
@@ -75,27 +78,39 @@ export async function runDailyStationInvestigations({
       }
     }
 
-    const investigationResponse = await fetch(new URL("/api/investigations", requestUrl), {
-      method: "POST",
-      headers: { ...requestHeaders, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        stationId: station.id,
-        metric: "all",
-        aggregationMinutes: 1,
-        start: scope.start,
-        end: scope.end,
-        useDemoData: false,
-        bypassCache: true,
-      }),
-      cache: "no-store",
-    });
+    try {
+      const investigationResponse = await fetch(new URL("/api/investigations", requestUrl), {
+        method: "POST",
+        headers: { ...requestHeaders, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          stationId: station.id,
+          metric: "all",
+          aggregationMinutes: 1,
+          start: scope.start,
+          end: scope.end,
+          useDemoData: false,
+          bypassCache: true,
+        }),
+        cache: "no-store",
+      });
 
-    if (!investigationResponse.ok) {
-      reports.push({ stationId: station.id, status: "failed" });
-    } else {
-      const investigation = (await investigationResponse.json()) as InvestigationResponse;
+      if (!investigationResponse.ok) {
+        throw new Error(`Investigation request failed (${investigationResponse.status}).`);
+      }
+
+      const investigation = await readJsonResponse<InvestigationResponse>(
+        investigationResponse,
+        "Investigation request",
+      );
       const report = await storeReport(investigation, scope.summaryDate, replaceExisting);
       reports.push({ stationId: station.id, status: replaceExisting ? "replaced" : "created", report });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown station investigation error";
+      console.error(
+        `Daily investigation failed for station ${station.id} (${station.name}) on ${dateKey}.`,
+        error,
+      );
+      reports.push({ stationId: station.id, status: "failed", message });
     }
 
     await onStationComplete?.({
@@ -292,6 +307,21 @@ function buildInternalRequestHeaders(): Record<string, string> {
   }
 
   return headers;
+}
+
+async function readJsonResponse<T>(response: Response, label: string): Promise<T> {
+  const contentType = response.headers.get("content-type");
+  if (!contentType?.toLowerCase().includes("application/json")) {
+    throw new Error(
+      `${label} returned ${contentType || "an unknown content type"} (${response.status}) instead of JSON.`,
+    );
+  }
+
+  try {
+    return await response.json() as T;
+  } catch {
+    throw new Error(`${label} returned invalid JSON (${response.status}).`);
+  }
 }
 
 function wait(ms: number) {
