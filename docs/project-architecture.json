@@ -1,22 +1,25 @@
 {
   "project": {
     "name": "kloudvestigate",
-    "purpose": "Internal telemetry investigation and publication-material preparation tool for KloudTrack station data.",
+    "purpose": "Internal telemetry investigation, daily station auditing, and publication-material preparation tool for KloudTrack station data.",
     "framework": "Next.js 16.2.6 App Router with React 19.2.4 and TypeScript.",
-    "summary": "Use this file as the compact project map for future work. The app has server-rendered App Router pages, focused client dashboards, route-handler APIs as the backend-for-frontend layer, server-only KloudTrack access, deterministic telemetry analysis, and demo data fallback when upstream credentials are missing."
+    "summary": "Use this file as the compact project map for future work. The app has server-rendered App Router pages, focused client dashboards, route-handler APIs as the backend-for-frontend layer, server-only KloudTrack access, deterministic telemetry analysis, persisted daily station audits, tagged audit-report caching, and demo data fallback when upstream credentials are missing."
   },
   "runtime": {
     "client": [
       "app/(protected)/layout.tsx verifies the internal access cookie before rendering protected app pages.",
-      "app/(protected)/page.tsx and app/(protected)/pubmat/page.tsx render the main dashboard and publication-material workflow at / and /pubmat.",
+      "app/(protected)/page.tsx, app/(protected)/pubmat/page.tsx, and app/(protected)/audit/page.tsx render the main dashboard, publication workflow, and audit calendar.",
       "components/telemetry/* contains client dashboards, forms, tables, charts, and station aggregate workflows.",
+      "components/audit/AuditCalendarWorkspace.tsx owns monthly calendar navigation, cached station summaries, manual rebuild progress, and lazy audit-log loading.",
       "components/architecture/MermaidDiagram.tsx is the browser-only Mermaid renderer used by the architecture page."
     ],
     "server": [
       "App Router pages are Server Components by default unless a child component declares use client.",
       "app/api/investigations/route.ts handles investigation runs and cache lookups.",
       "app/api/pubmat-quick-fetch/route.ts fetches station buckets for publication tables.",
-      "app/api/stations/route.ts returns station metadata from KloudTrack or demo data."
+      "app/api/stations/route.ts returns station metadata from KloudTrack or demo data.",
+      "app/api/audit-reports/route.ts serves cached monthly summaries and daily audit details; app/api/audit-reports/run/route.ts streams manual rebuild progress.",
+      "Cron routes run daily station investigations and enforce audit-log retention, while Prisma persists DailyStationSummary and StationAuditLog records."
     ]
   },
   "majorModules": [
@@ -39,6 +42,26 @@
       "name": "Investigation cache",
       "paths": ["lib/server-investigation-cache.ts"],
       "responsibility": "Stores recent deterministic investigation payloads in memory for batch lookup and dashboard hydration."
+    },
+    {
+      "name": "Audit workspace",
+      "paths": ["components/audit/AuditCalendarWorkspace.tsx", "app/(protected)/audit/page.tsx"],
+      "responsibility": "Presents the monthly audit calendar, reuses monthly station summaries for instant date navigation, streams rebuild progress, and loads detailed audit logs only on demand."
+    },
+    {
+      "name": "Daily audit pipeline",
+      "paths": ["lib/daily-station-investigations.ts", "app/api/audit-reports/run/route.ts", "app/api/cron/daily-station-investigations/route.ts"],
+      "responsibility": "Runs station investigations for a Philippine calendar day and transactionally replaces or creates persisted station summaries and audit-log rows."
+    },
+    {
+      "name": "Audit report cache",
+      "paths": ["lib/audit-report-cache.ts", "app/api/audit-reports/route.ts"],
+      "responsibility": "Caches month, date, station, and detail-specific audit payloads for five minutes and immediately expires affected date/month tags after successful writes."
+    },
+    {
+      "name": "Audit persistence and retention",
+      "paths": ["prisma/schema.prisma", "app/api/cron/audit-log-retention/route.ts"],
+      "responsibility": "Stores daily station summaries and related audit logs in PostgreSQL and removes audit-log details outside the current Philippine month."
     }
   ],
   "security": [
@@ -68,7 +91,13 @@
       "id": "client-architecture",
       "title": "Client Architecture",
       "description": "Server pages keep shells light, while focused client components own stateful investigation, publication, table, chart, and Mermaid interactions.",
-      "mermaid": "flowchart TD\n  Layout[app/layout.tsx] --> Protected[app/(protected)/layout.tsx]\n  Layout --> Login[app/login/page.tsx]\n  Protected --> Home[app/(protected)/page.tsx]\n  Protected --> Pubmat[app/(protected)/pubmat/page.tsx]\n  Protected --> Architecture[app/(protected)/architecture/page.tsx]\n  Home --> Dashboard[TelemetryInvestigationDashboard]\n  Pubmat --> Workspace[PubmatWorkspace]\n  Workspace --> QuickFetch[PubmatQuickFetch]\n  QuickFetch --> Values[FetchedValuesTable]\n  Dashboard --> Summary[SummaryStats]\n  Dashboard --> Timeline[TelemetryTimeline]\n  Dashboard --> Events[EventsPanel]\n  Architecture --> Mermaid[MermaidDiagram client island]"
+      "mermaid": "flowchart TD\n  Layout[\"app/layout.tsx\"] --> Protected[\"app/(protected)/layout.tsx\"]\n  Layout --> Login[\"app/login/page.tsx\"]\n  Protected --> Home[\"app/(protected)/page.tsx\"]\n  Protected --> Pubmat[\"app/(protected)/pubmat/page.tsx\"]\n  Protected --> Audit[\"app/(protected)/audit/page.tsx\"]\n  Protected --> Architecture[\"app/(protected)/architecture/page.tsx\"]\n  Home --> Dashboard[TelemetryInvestigationDashboard]\n  Pubmat --> Workspace[PubmatWorkspace]\n  Workspace --> QuickFetch[PubmatQuickFetch]\n  QuickFetch --> Values[FetchedValuesTable]\n  Audit --> AuditWorkspace[AuditCalendarWorkspace]\n  AuditWorkspace --> AuditCalendar[Monthly calendar and quick date navigator]\n  AuditWorkspace --> StationSummary[Station summary table]\n  AuditWorkspace --> AuditDetails[Lazy audit detail tables]\n  Dashboard --> Summary[SummaryStats]\n  Dashboard --> Timeline[TelemetryTimeline]\n  Dashboard --> Events[EventsPanel]\n  Architecture --> Mermaid[MermaidDiagram client island]"
+    },
+    {
+      "id": "audit-architecture",
+      "title": "Audit Architecture",
+      "description": "Monthly summary reads and daily audit details are cached separately, while manual and scheduled rebuilds persist results and immediately invalidate affected cache tags.",
+      "mermaid": "flowchart LR\n  AuditUI[AuditCalendarWorkspace] -->|Monthly summaries or daily details| Reports[\"GET /api/audit-reports\"]\n  Reports --> ReportCache[Tagged audit report cache]\n  ReportCache --> Database[(PostgreSQL via Prisma)]\n  AuditUI -->|Manual rebuild| Run[\"POST /api/audit-reports/run\"]\n  DailyCron[Daily investigation cron] --> Runner[Daily station investigations]\n  Run --> Runner\n  Runner --> Investigation[\"POST /api/investigations\"]\n  Investigation --> Analysis[Deterministic telemetry analysis]\n  Analysis --> Runner\n  Runner -->|Transactional summaries and logs| Database\n  Runner -->|Expire date and month tags| ReportCache\n  Retention[Audit log retention cron] -->|Delete logs outside current PHT month| Database\n  Retention -->|Expire all audit tags after deletion| ReportCache"
     },
     {
       "id": "response-strategy",
@@ -84,6 +113,6 @@
     "INTERNAL_ACCESS_TOKEN enables the shared login gate, signs the internal access cookie, and guards APIs when configured or in production."
   ],
   "futureWork": [
-    "Add automated tests around metric endpoint resolution, bucket windows, and investigation payload shape."
+    "Add automated tests around metric endpoint resolution, bucket windows, investigation payload shape, and audit cache invalidation."
   ]
 }

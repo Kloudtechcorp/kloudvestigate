@@ -11,7 +11,7 @@ export default function ArchitecturePage() {
   return (
     <PageShell
       eyebrow="System design"
-      title="Telemetry Investigation Architecture"
+      title="Kloudvestigate Architecture"
       description={data.project.summary}
       maxWidth="narrow"
     >
