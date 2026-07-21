@@ -8,7 +8,7 @@ const AUDIT_REPORT_REVALIDATE_SECONDS = 5 * 60;
 export async function getCachedMonthlyAuditSummaries(month: string, stationId?: string) {
   return unstable_cache(
     () => loadMonthlyAuditSummaries(month, stationId),
-    ["monthly-audit-summaries", month, stationId ?? "all"],
+    ["monthly-audit-summaries-v2", month, stationId ?? "all"],
     {
       revalidate: AUDIT_REPORT_REVALIDATE_SECONDS,
       tags: [AUDIT_REPORTS_TAG, monthTag(month)],
@@ -53,6 +53,7 @@ async function loadMonthlyAuditSummaries(month: string, stationId?: string) {
         summaryDate: true,
         missingCount: true,
         rangeViolationCount: true,
+        rangeViolationSummary: true,
       },
       orderBy: { summaryDate: "asc" },
     }),
@@ -67,6 +68,14 @@ async function loadMonthlyAuditSummaries(month: string, stationId?: string) {
     missingCount: number;
     rangeViolationCount: number;
     rangeViolationStations: Map<string, string>;
+    stationSummaries: Array<{
+      stationId: string;
+      stationName: string;
+      missingCount: number;
+      rangeViolationCount: number;
+      rangeViolationSummary: unknown;
+      auditLogs: never[];
+    }>;
   }>();
   for (const row of rows) {
     const date = toDateKey(row.summaryDate);
@@ -74,12 +83,21 @@ async function loadMonthlyAuditSummaries(month: string, stationId?: string) {
       missingCount: 0,
       rangeViolationCount: 0,
       rangeViolationStations: new Map<string, string>(),
+      stationSummaries: [],
     };
     total.missingCount += row.missingCount;
     total.rangeViolationCount += row.rangeViolationCount;
     if (row.rangeViolationCount > 0) {
       total.rangeViolationStations.set(row.stationId, row.stationName ?? row.stationId);
     }
+    total.stationSummaries.push({
+      stationId: row.stationId,
+      stationName: row.stationName ?? row.stationId,
+      missingCount: row.missingCount,
+      rangeViolationCount: row.rangeViolationCount,
+      rangeViolationSummary: row.rangeViolationSummary,
+      auditLogs: [],
+    });
     totalsByDate.set(date, total);
   }
 
@@ -89,6 +107,7 @@ async function loadMonthlyAuditSummaries(month: string, stationId?: string) {
       date,
       missingCount: totals.missingCount,
       rangeViolationCount: totals.rangeViolationCount,
+      stationSummaries: totals.stationSummaries,
       rangeViolationStations: [...totals.rangeViolationStations]
         .map(([id, name]) => ({ id, name }))
         .sort((a, b) => a.name.localeCompare(b.name)),

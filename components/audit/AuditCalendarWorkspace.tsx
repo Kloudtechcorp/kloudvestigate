@@ -8,6 +8,7 @@ type CalendarSummary = {
   missingCount: number;
   rangeViolationCount: number;
   rangeViolationStations: StationOption[];
+  stationSummaries: DailySummary[];
 };
 
 type StationOption = { id: string; name: string };
@@ -47,6 +48,7 @@ const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 export function AuditCalendarWorkspace() {
   const hydrated = useHydrated();
   const detailRequestController = useRef<AbortController | null>(null);
+  const selectedDateRef = useRef<string | null>(null);
   const [month, setMonth] = useState(getCurrentPhtMonth);
   const [stationId, setStationId] = useState("");
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
@@ -76,6 +78,13 @@ export function AuditCalendarWorkspace() {
       .then((payload) => {
         setSummaries(payload.summaries);
         setStations(payload.stations);
+        const currentDate = selectedDateRef.current;
+        if (currentDate) {
+          setDailySummaries(
+            payload.summaries.find((summary) => summary.date === currentDate)?.stationSummaries ?? [],
+          );
+          setDailySummaryLoading(false);
+        }
       })
       .catch((requestError: unknown) => {
         if (!controller.signal.aborted) {
@@ -88,31 +97,6 @@ export function AuditCalendarWorkspace() {
 
     return () => controller.abort();
   }, [month, stationId, refreshKey]);
-
-  useEffect(() => {
-    if (!selectedDate) return;
-
-    const controller = new AbortController();
-    const params = new URLSearchParams({ date: selectedDate });
-    if (stationId) params.set("stationId", stationId);
-
-    fetch(`/api/audit-reports?${params}`, { cache: "no-store", signal: controller.signal })
-      .then(async (response) => {
-        if (!response.ok) throw new Error(`Audit request failed (${response.status})`);
-        return response.json() as Promise<DailyResponse>;
-      })
-      .then((payload) => setDailySummaries(payload.summaries))
-      .catch((requestError: unknown) => {
-        if (!controller.signal.aborted) {
-          setError(requestError instanceof Error ? requestError.message : "Unable to load daily audits.");
-        }
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setDailySummaryLoading(false);
-      });
-
-    return () => controller.abort();
-  }, [selectedDate, stationId, refreshKey]);
 
   const summariesByDate = useMemo(
     () => new Map(summaries.map((summary) => [summary.date, summary])),
@@ -132,6 +116,7 @@ export function AuditCalendarWorkspace() {
     setError(null);
     setDailySummaries([]);
     setMonth((current) => offsetMonth(current, offset));
+    selectedDateRef.current = null;
     setSelectedDate(null);
   }
 
@@ -147,9 +132,10 @@ export function AuditCalendarWorkspace() {
   function selectDate(date: string) {
     if (date === selectedDate) return;
     resetAuditDetails();
-    setDailySummaryLoading(true);
+    setDailySummaryLoading(false);
     setError(null);
-    setDailySummaries([]);
+    setDailySummaries(summariesByDate.get(date)?.stationSummaries ?? []);
+    selectedDateRef.current = date;
     setSelectedDate(date);
   }
 
@@ -352,31 +338,107 @@ export function AuditCalendarWorkspace() {
       ) : dailySummaryLoading ? (
         <div className="panel py-8 text-center text-sm text-text-secondary">Loading {formatDate(selectedDate)} station summary...</div>
       ) : (
-        <>
-          <StationDateSummary date={selectedDate} summaries={dailySummaries} />
-          {detailsLoaded ? (
-            <AuditDetails date={selectedDate} rangeRows={rangeRows} missingRows={missingRows} />
-          ) : (
-            <section className="panel flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <h2 className="panel-title">Detailed audits</h2>
-                <p className="mt-1 text-xs text-text-secondary">
-                  Load the acceptable-range audit and data-quality sections only when you need them.
-                </p>
-              </div>
-              <button
-                className="primary-action shrink-0"
-                disabled={detailLoading}
-                onClick={() => void loadAuditDetails()}
-                type="button"
-              >
-                {detailLoading ? "Loading details..." : "Load detailed audits"}
-              </button>
-            </section>
-          )}
-        </>
+        <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_17rem]">
+          <div className="grid min-w-0 gap-4">
+            <StationDateSummary date={selectedDate} summaries={dailySummaries} />
+            {detailsLoaded ? (
+              <AuditDetails date={selectedDate} rangeRows={rangeRows} missingRows={missingRows} />
+            ) : (
+              <section className="panel flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <h2 className="panel-title">Detailed audits</h2>
+                  <p className="mt-1 text-xs text-text-secondary">
+                    Load the acceptable-range audit and data-quality sections only when you need them.
+                  </p>
+                </div>
+                <button
+                  className="primary-action shrink-0"
+                  disabled={detailLoading}
+                  onClick={() => void loadAuditDetails()}
+                  type="button"
+                >
+                  {detailLoading ? "Loading details..." : "Load detailed audits"}
+                </button>
+              </section>
+            )}
+          </div>
+          <CompactDateNavigator
+            calendarDays={calendarDays}
+            month={month}
+            onSelectDate={selectDate}
+            selectedDate={selectedDate}
+            summariesByDate={summariesByDate}
+          />
+        </div>
       )}
     </div>
+  );
+}
+
+function CompactDateNavigator({
+  calendarDays,
+  month,
+  onSelectDate,
+  selectedDate,
+  summariesByDate,
+}: {
+  calendarDays: ReturnType<typeof buildCalendarDays>;
+  month: string;
+  onSelectDate: (date: string) => void;
+  selectedDate: string;
+  summariesByDate: Map<string, CalendarSummary>;
+}) {
+  return (
+    <aside
+      aria-label="Quick date navigation"
+      className="panel sticky top-12 z-20 hidden p-3 shadow-lg xl:block"
+    >
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wide text-text-muted">Quick date</p>
+          <p className="mt-0.5 text-sm font-semibold text-text-primary">{formatMonth(month)}</p>
+        </div>
+        <span className="status-chip">{Number(selectedDate.slice(-2))}</span>
+      </div>
+      <div className="grid grid-cols-7 gap-1" role="grid">
+        {WEEKDAYS.map((day) => (
+          <span className="py-1 text-center text-[10px] font-semibold text-text-muted" key={day} role="columnheader">
+            {day.slice(0, 1)}
+          </span>
+        ))}
+        {calendarDays.map((day) => {
+          const summary = day.date ? summariesByDate.get(day.date) : undefined;
+          const selected = day.date === selectedDate;
+          const hasFindings = Boolean(summary && (summary.missingCount || summary.rangeViolationCount));
+          return day.date ? (
+            <button
+              aria-current={selected ? "date" : undefined}
+              aria-label={`${formatDate(day.date)}${hasFindings ? ", has findings" : ""}`}
+              className={`relative flex aspect-square items-center justify-center rounded text-xs font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent ${
+                selected
+                  ? "bg-accent text-white"
+                  : "text-text-secondary hover:bg-bg-raised hover:text-text-primary"
+              }`}
+              key={day.key}
+              onClick={() => onSelectDate(day.date!)}
+              role="gridcell"
+              type="button"
+            >
+              {day.dayNumber}
+              {hasFindings ? (
+                <span
+                  aria-hidden="true"
+                  className={`absolute bottom-1 h-1 w-1 rounded-full ${selected ? "bg-white" : "bg-danger"}`}
+                />
+              ) : null}
+            </button>
+          ) : <span aria-hidden="true" key={day.key} role="gridcell" />;
+        })}
+      </div>
+      <p className="mt-3 border-t border-border pt-2 text-[11px] leading-4 text-text-muted">
+        Dates with findings are marked with a dot.
+      </p>
+    </aside>
   );
 }
 
