@@ -1,5 +1,6 @@
 import { authorizeCron } from "@/lib/cron-auth";
 import { prisma } from "@/lib/prisma";
+import { invalidateAllAuditReports } from "@/lib/audit-report-cache";
 
 export const dynamic = "force-dynamic";
 
@@ -20,6 +21,8 @@ export async function GET(request: Request) {
         ],
       },
     });
+
+    if (deleted.count > 0) invalidateAllAuditReports();
 
     return Response.json({
       month: month.key,

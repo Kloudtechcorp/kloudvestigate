@@ -1,6 +1,7 @@
 import { Prisma } from "@/app/generated/prisma/client";
 import type { InvestigationResponse, StationsResponse } from "@/components/telemetry/types";
 import { prisma } from "@/lib/prisma";
+import { invalidateAuditReportDate } from "@/lib/audit-report-cache";
 
 const PHT_OFFSET_MS = 8 * 60 * 60_000;
 const REQUEST_GAP_MS = 600;
@@ -251,6 +252,8 @@ async function storeReport(
         },
       );
 
+      invalidateAuditReportDate(summaryDate.toISOString().slice(0, 10));
+
       return loadStoredReport(investigation.station.id, summaryDate);
     }
 
@@ -261,6 +264,8 @@ async function storeReport(
       },
       include: { auditLogs: true },
     });
+
+    invalidateAuditReportDate(summaryDate.toISOString().slice(0, 10));
 
     return serializeReport(report);
   } catch (error) {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { ChevronLeft, ChevronRight, Maximize2, Minimize2, RefreshCw } from "lucide-react";
 
 type CalendarSummary = {
@@ -46,6 +46,7 @@ const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 export function AuditCalendarWorkspace() {
   const hydrated = useHydrated();
+  const detailRequestController = useRef<AbortController | null>(null);
   const [month, setMonth] = useState(getCurrentPhtMonth);
   const [stationId, setStationId] = useState("");
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
@@ -53,7 +54,9 @@ export function AuditCalendarWorkspace() {
   const [stations, setStations] = useState<StationOption[]>([]);
   const [dailySummaries, setDailySummaries] = useState<DailySummary[]>([]);
   const [summaryLoading, setSummaryLoading] = useState(true);
+  const [dailySummaryLoading, setDailySummaryLoading] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [detailsLoaded, setDetailsLoaded] = useState(false);
   const [rebuildLoading, setRebuildLoading] = useState(false);
   const [rebuildProgress, setRebuildProgress] = useState<RebuildProgress | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
@@ -105,7 +108,7 @@ export function AuditCalendarWorkspace() {
         }
       })
       .finally(() => {
-        if (!controller.signal.aborted) setDetailLoading(false);
+        if (!controller.signal.aborted) setDailySummaryLoading(false);
       });
 
     return () => controller.abort();
@@ -124,6 +127,7 @@ export function AuditCalendarWorkspace() {
   const missingRows = dailySummaries.filter((summary) => summary.missingCount > 0);
 
   function changeMonth(offset: number) {
+    resetAuditDetails();
     setSummaryLoading(true);
     setError(null);
     setDailySummaries([]);
@@ -132,8 +136,9 @@ export function AuditCalendarWorkspace() {
   }
 
   function changeStation(nextStationId: string) {
+    resetAuditDetails();
     setSummaryLoading(true);
-    setDetailLoading(Boolean(selectedDate));
+    setDailySummaryLoading(Boolean(selectedDate));
     setError(null);
     setDailySummaries([]);
     setStationId(nextStationId);
@@ -141,10 +146,49 @@ export function AuditCalendarWorkspace() {
 
   function selectDate(date: string) {
     if (date === selectedDate) return;
-    setDetailLoading(true);
+    resetAuditDetails();
+    setDailySummaryLoading(true);
     setError(null);
     setDailySummaries([]);
     setSelectedDate(date);
+  }
+
+  async function loadAuditDetails() {
+    if (!selectedDate || detailLoading || detailsLoaded) return;
+
+    const controller = new AbortController();
+    detailRequestController.current = controller;
+    const params = new URLSearchParams({ date: selectedDate, includeDetails: "true" });
+    if (stationId) params.set("stationId", stationId);
+
+    setDetailLoading(true);
+    setError(null);
+    try {
+      const response = await fetch(`/api/audit-reports?${params}`, {
+        cache: "no-store",
+        signal: controller.signal,
+      });
+      if (!response.ok) throw new Error(`Audit detail request failed (${response.status})`);
+      const payload = await response.json() as DailyResponse;
+      setDailySummaries(payload.summaries);
+      setDetailsLoaded(true);
+    } catch (requestError) {
+      if (!controller.signal.aborted) {
+        setError(requestError instanceof Error ? requestError.message : "Unable to load audit details.");
+      }
+    } finally {
+      if (!controller.signal.aborted) {
+        detailRequestController.current = null;
+        setDetailLoading(false);
+      }
+    }
+  }
+
+  function resetAuditDetails() {
+    detailRequestController.current?.abort();
+    detailRequestController.current = null;
+    setDetailLoading(false);
+    setDetailsLoaded(false);
   }
 
   async function rebuildSelectedDate() {
@@ -178,8 +222,9 @@ export function AuditCalendarWorkspace() {
       }
 
       setNotice(`Rebuilt ${result.stationCount} station report${result.stationCount === 1 ? "" : "s"} for ${formatDate(selectedDate)}.`);
+      resetAuditDetails();
       setSummaryLoading(true);
-      setDetailLoading(true);
+      setDailySummaryLoading(true);
       setRefreshKey((current) => current + 1);
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : "Unable to rebuild the selected date.");
@@ -304,12 +349,31 @@ export function AuditCalendarWorkspace() {
 
       {!selectedDate ? (
         <div className="panel py-8 text-center text-sm text-text-secondary">Select a calendar date to load audit details.</div>
-      ) : detailLoading ? (
-        <div className="panel py-8 text-center text-sm text-text-secondary">Loading {formatDate(selectedDate)} audits...</div>
+      ) : dailySummaryLoading ? (
+        <div className="panel py-8 text-center text-sm text-text-secondary">Loading {formatDate(selectedDate)} station summary...</div>
       ) : (
         <>
           <StationDateSummary date={selectedDate} summaries={dailySummaries} />
-          <AuditDetails date={selectedDate} rangeRows={rangeRows} missingRows={missingRows} />
+          {detailsLoaded ? (
+            <AuditDetails date={selectedDate} rangeRows={rangeRows} missingRows={missingRows} />
+          ) : (
+            <section className="panel flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <h2 className="panel-title">Detailed audits</h2>
+                <p className="mt-1 text-xs text-text-secondary">
+                  Load the acceptable-range audit and data-quality sections only when you need them.
+                </p>
+              </div>
+              <button
+                className="primary-action shrink-0"
+                disabled={detailLoading}
+                onClick={() => void loadAuditDetails()}
+                type="button"
+              >
+                {detailLoading ? "Loading details..." : "Load detailed audits"}
+              </button>
+            </section>
+          )}
         </>
       )}
     </div>
@@ -317,6 +381,15 @@ export function AuditCalendarWorkspace() {
 }
 
 function StationDateSummary({ date, summaries }: { date: string; summaries: DailySummary[] }) {
+  const sortedSummaries = [...summaries].sort((a, b) => {
+    const groupSort = getStationGroup(a.stationName).localeCompare(
+      getStationGroup(b.stationName),
+      undefined,
+      { numeric: true, sensitivity: "base" },
+    );
+    return groupSort || a.stationName.localeCompare(b.stationName, undefined, { numeric: true, sensitivity: "base" });
+  });
+
   return (
     <section className="panel p-0">
       <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
@@ -332,7 +405,7 @@ function StationDateSummary({ date, summaries }: { date: string; summaries: Dail
             <tr><th>Station</th><th>Missing records</th><th>Out of range</th><th>Range violations by metric</th><th>Status</th></tr>
           </thead>
           <tbody>
-            {summaries.length ? summaries.map((summary) => {
+            {sortedSummaries.length ? sortedSummaries.map((summary) => {
               const issueCount = summary.missingCount + summary.rangeViolationCount;
               const violationsByMetric = readRangeViolationSummary(summary.rangeViolationSummary);
               return (
@@ -369,6 +442,10 @@ function StationDateSummary({ date, summaries }: { date: string; summaries: Dail
       </div>
     </section>
   );
+}
+
+function getStationGroup(stationName: string) {
+  return stationName.split("-").at(-1)?.trim() ?? stationName;
 }
 
 function AuditDetails({
