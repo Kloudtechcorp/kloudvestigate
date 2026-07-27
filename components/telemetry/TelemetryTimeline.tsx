@@ -80,7 +80,6 @@ function TelemetryChart({
       interval,
       start: interval.start,
       end: interval.end,
-      label: interval.label,
       maximum: getIntervalChartValue(interval),
       values: tooltipValuesByTimestamp.get(interval.start) ?? [],
     })),
@@ -175,10 +174,11 @@ function TelemetryChart({
           >
             <CartesianGrid vertical={false} stroke="var(--chart-grid)" />
             <XAxis
-              dataKey="label"
+              dataKey="start"
               interval="preserveStartEnd"
               minTickGap={28}
               tick={{ fill: "var(--muted-foreground)", fontSize: 11 }}
+              tickFormatter={(start) => formatTimelineTick(String(start), intervalMinutes)}
               tickLine={false}
               axisLine={false}
             />
@@ -202,7 +202,6 @@ interface TimelinePoint {
   interval: IntervalSummary;
   start: string;
   end: string;
-  label: string;
   maximum: number | null;
   values: TooltipMetricValue[];
 }
@@ -400,6 +399,25 @@ function formatIntervalMinutes(minutes?: number) {
   if (minutes % 1440 === 0) return `${minutes / 1440} day${minutes === 1440 ? "" : "s"}`;
   if (minutes % 60 === 0) return `${minutes / 60} hr${minutes === 60 ? "" : "s"}`;
   return `${minutes} min`;
+}
+
+function formatTimelineTick(value: string, intervalMinutes?: number) {
+  const parts = new Intl.DateTimeFormat("en-PH", {
+    year: intervalMinutes && intervalMinutes >= 1440 ? "numeric" : undefined,
+    month: intervalMinutes && intervalMinutes >= 1440 ? "2-digit" : undefined,
+    day: intervalMinutes && intervalMinutes >= 1440 ? "2-digit" : undefined,
+    hour: intervalMinutes && intervalMinutes >= 1440 ? undefined : "2-digit",
+    minute: intervalMinutes && intervalMinutes >= 1440 ? undefined : "2-digit",
+    hourCycle: "h23",
+    timeZone: "Asia/Manila",
+  }).formatToParts(new Date(value));
+  const byType = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+
+  if (intervalMinutes && intervalMinutes >= 1440) {
+    return `${byType.year}-${byType.month}-${byType.day}`;
+  }
+
+  return `${byType.hour}:${byType.minute}`;
 }
 
 function formatMetricValue(value: number | null) {
