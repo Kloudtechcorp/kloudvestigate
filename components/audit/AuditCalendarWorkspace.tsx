@@ -1,7 +1,18 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { ChevronLeft, ChevronRight, Maximize2, Minimize2, RefreshCw } from "lucide-react";
+import { useRouter } from "next/navigation";
+import {
+  CalendarDays,
+  CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
+  Ellipsis,
+  Maximize2,
+  Minimize2,
+  RefreshCw,
+  TriangleAlert,
+} from "lucide-react";
 
 type CalendarSummary = {
   date: string;
@@ -44,19 +55,34 @@ type RebuildProgress = {
 };
 
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const MISSING_ATTENTION_THRESHOLD = 100;
 
-export function AuditCalendarWorkspace() {
+type AuditCalendarWorkspaceProps = {
+  initialDate: string | null;
+  initialMonth: string;
+  initialStationId: string;
+};
+
+export function AuditCalendarWorkspace({
+  initialDate,
+  initialMonth,
+  initialStationId,
+}: AuditCalendarWorkspaceProps) {
+  const router = useRouter();
   const hydrated = useHydrated();
   const detailRequestController = useRef<AbortController | null>(null);
-  const selectedDateRef = useRef<string | null>(null);
-  const [month, setMonth] = useState(getCurrentPhtMonth);
-  const [stationId, setStationId] = useState("");
-  const [selectedDate, setSelectedDate] = useState<string | null>(null);
+  const selectedDateRef = useRef<string | null>(initialDate);
+  const monthRef = useRef(initialMonth);
+  const stationIdRef = useRef(initialStationId);
+  const initialScopeRef = useRef({ initialDate, initialMonth, initialStationId });
+  const [month, setMonth] = useState(initialMonth);
+  const [stationId, setStationId] = useState(initialStationId);
+  const [selectedDate, setSelectedDate] = useState<string | null>(initialDate);
   const [summaries, setSummaries] = useState<CalendarSummary[]>([]);
   const [stations, setStations] = useState<StationOption[]>([]);
   const [dailySummaries, setDailySummaries] = useState<DailySummary[]>([]);
   const [summaryLoading, setSummaryLoading] = useState(true);
-  const [dailySummaryLoading, setDailySummaryLoading] = useState(false);
+  const [dailySummaryLoading, setDailySummaryLoading] = useState(Boolean(initialDate));
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailsLoaded, setDetailsLoaded] = useState(false);
   const [rebuildLoading, setRebuildLoading] = useState(false);
@@ -64,6 +90,39 @@ export function AuditCalendarWorkspace() {
   const [refreshKey, setRefreshKey] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const today = useMemo(() => getCurrentPhtDate(), []);
+  const yesterday = useMemo(() => offsetDate(today, -1), [today]);
+
+  useEffect(() => {
+    const previous = initialScopeRef.current;
+    if (
+      previous.initialDate === initialDate
+      && previous.initialMonth === initialMonth
+      && previous.initialStationId === initialStationId
+    ) return;
+
+    initialScopeRef.current = { initialDate, initialMonth, initialStationId };
+    if (
+      monthRef.current === initialMonth
+      && selectedDateRef.current === initialDate
+      && stationIdRef.current === initialStationId
+    ) return;
+
+    detailRequestController.current?.abort();
+    detailRequestController.current = null;
+    monthRef.current = initialMonth;
+    selectedDateRef.current = initialDate;
+    stationIdRef.current = initialStationId;
+    setMonth(initialMonth);
+    setSelectedDate(initialDate);
+    setStationId(initialStationId);
+    setDailySummaries([]);
+    setDetailsLoaded(false);
+    setDetailLoading(false);
+    setSummaryLoading(true);
+    setDailySummaryLoading(Boolean(initialDate));
+    setError(null);
+  }, [initialDate, initialMonth, initialStationId]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -103,6 +162,7 @@ export function AuditCalendarWorkspace() {
     [summaries],
   );
   const calendarDays = useMemo(() => buildCalendarDays(month), [month]);
+  const selectedSummary = selectedDate ? summariesByDate.get(selectedDate) : undefined;
   const rangeRows = dailySummaries.flatMap((summary) =>
     summary.auditLogs
       .filter((log) => log.type === "rangeViolation")
@@ -111,13 +171,16 @@ export function AuditCalendarWorkspace() {
   const missingRows = dailySummaries.filter((summary) => summary.missingCount > 0);
 
   function changeMonth(offset: number) {
+    const nextMonth = offsetMonth(monthRef.current, offset);
     resetAuditDetails();
     setSummaryLoading(true);
     setError(null);
     setDailySummaries([]);
-    setMonth((current) => offsetMonth(current, offset));
+    monthRef.current = nextMonth;
+    setMonth(nextMonth);
     selectedDateRef.current = null;
     setSelectedDate(null);
+    updateAuditUrl(nextMonth, null, stationIdRef.current, "push");
   }
 
   function changeStation(nextStationId: string) {
@@ -126,7 +189,9 @@ export function AuditCalendarWorkspace() {
     setDailySummaryLoading(Boolean(selectedDate));
     setError(null);
     setDailySummaries([]);
+    stationIdRef.current = nextStationId;
     setStationId(nextStationId);
+    updateAuditUrl(monthRef.current, selectedDateRef.current, nextStationId, "replace");
   }
 
   function selectDate(date: string) {
@@ -137,6 +202,19 @@ export function AuditCalendarWorkspace() {
     setDailySummaries(summariesByDate.get(date)?.stationSummaries ?? []);
     selectedDateRef.current = date;
     setSelectedDate(date);
+    updateAuditUrl(monthRef.current, date, stationIdRef.current, "push");
+  }
+
+  function updateAuditUrl(
+    nextMonth: string,
+    nextDate: string | null,
+    nextStationId: string,
+    history: "push" | "replace",
+  ) {
+    const params = new URLSearchParams({ month: nextMonth });
+    if (nextDate) params.set("date", nextDate);
+    if (nextStationId) params.set("stationId", nextStationId);
+    router[history](`/?${params.toString()}`, { scroll: false });
   }
 
   async function loadAuditDetails() {
@@ -246,17 +324,27 @@ export function AuditCalendarWorkspace() {
                 {stations.map((station) => <option key={station.id} value={station.id}>{station.name}</option>)}
               </select>
             </label>
-            <button
-              className="primary-action inline-flex items-center justify-center gap-2"
-              disabled={hydrated ? !selectedDate || rebuildLoading : undefined}
-              onClick={() => void rebuildSelectedDate()}
-              type="button"
-            >
-              <RefreshCw className={`h-4 w-4 ${rebuildLoading ? "animate-spin" : ""}`} aria-hidden="true" />
-              {rebuildLoading
-                ? `Rebuilding ${rebuildProgress?.completed ?? 0}/${rebuildProgress?.total || "..."}`
-                : "Rebuild selected date"}
-            </button>
+            <details className="group relative self-end sm:self-auto">
+              <summary className="icon-button list-none" aria-label="Open audit actions" title="Audit actions">
+                <Ellipsis className="h-4 w-4" aria-hidden="true" />
+              </summary>
+              <div className="absolute right-0 top-10 z-30 w-64 border border-border bg-bg-surface p-2 shadow-lg">
+                <button
+                  className="nav-pill flex w-full items-center gap-2 text-left"
+                  disabled={hydrated ? !selectedDate || rebuildLoading : undefined}
+                  onClick={() => void rebuildSelectedDate()}
+                  type="button"
+                >
+                  <RefreshCw className={`h-4 w-4 ${rebuildLoading ? "animate-spin" : ""}`} aria-hidden="true" />
+                  {rebuildLoading
+                    ? `Rebuilding ${rebuildProgress?.completed ?? 0}/${rebuildProgress?.total || "..."}`
+                    : "Rebuild selected date"}
+                </button>
+                <p className="px-2 pb-1 pt-2 text-[11px] leading-4 text-text-muted">
+                  Replaces the saved summary and logs for the current scope.
+                </p>
+              </div>
+            </details>
           </div>
         </div>
 
@@ -283,7 +371,7 @@ export function AuditCalendarWorkspace() {
           </div>
         ) : null}
 
-        <div className="overflow-x-auto p-3">
+        <div className="hidden overflow-x-auto p-3 sm:block">
           <div className="grid min-w-[760px] grid-cols-7 border-l border-t border-border">
             {WEEKDAYS.map((day) => (
               <div className="border-b border-r border-border bg-bg-raised px-2 py-2 text-xs font-semibold text-text-secondary" key={day}>
@@ -293,8 +381,13 @@ export function AuditCalendarWorkspace() {
             {calendarDays.map((day) => {
               const summary = day.date ? summariesByDate.get(day.date) : undefined;
               const selected = day.date === selectedDate;
+              const hasMissingAttention = summary?.stationSummaries.some(hasMissingAttentionForStation) ?? false;
+              const isToday = day.date === today;
+              const isYesterday = day.date === yesterday;
+              const isFuture = Boolean(day.date && day.date > today);
               return (
                 <button
+                  aria-current={selected ? "date" : undefined}
                   className={`min-h-28 border-b border-r border-border p-2 text-left align-top transition-colors ${
                     selected ? "bg-accent-subtle" : "bg-bg-surface hover:bg-bg-raised"
                   } ${day.date ? "" : "cursor-default opacity-40"}`}
@@ -303,9 +396,19 @@ export function AuditCalendarWorkspace() {
                   onClick={() => day.date && selectDate(day.date)}
                   type="button"
                 >
-                  <span className="font-mono text-xs text-text-secondary">{day.dayNumber}</span>
+                  <span className="flex items-center justify-between gap-2">
+                    <span className="font-mono text-xs text-text-secondary">{day.dayNumber}</span>
+                    {isYesterday ? <span className="status-chip">Latest complete</span> : null}
+                  </span>
                   <span className="mt-3 flex flex-col items-start gap-1">
-                    {summary?.missingCount ? <span className="count-chip">{summary.missingCount} missing</span> : null}
+                    {summary?.missingCount ? (
+                      <span
+                        className={`count-chip ${hasMissingAttention ? "count-chip-caution" : ""}`}
+                        title={hasMissingAttention ? "At least one station has 100 or more missing records" : "All stations are below the 100-record threshold"}
+                      >
+                        {summary.missingCount} missing
+                      </span>
+                    ) : null}
                     {summary?.rangeViolationCount ? <span className="count-chip count-chip-danger">{summary.rangeViolationCount} out of range</span> : null}
                     {summary?.rangeViolationStations.slice(0, 2).map((station) => (
                       <span
@@ -324,12 +427,28 @@ export function AuditCalendarWorkspace() {
                         +{summary.rangeViolationStations.length - 2} stations
                       </span>
                     ) : null}
-                    {!summary && day.date && !summaryLoading ? <span className="text-[11px] text-text-muted">No report</span> : null}
+                    {isToday ? <span className="text-[11px] font-medium text-text-secondary">Audited tomorrow</span> : null}
+                    {!summary && day.date && !summaryLoading && !isToday && !isFuture ? (
+                      <span className="text-[11px] text-text-muted">No report</span>
+                    ) : null}
                   </span>
                 </button>
               );
             })}
           </div>
+        </div>
+        <div className="p-3 sm:hidden">
+          <CompactMonthGrid
+            calendarDays={calendarDays}
+            onSelectDate={selectDate}
+            selectedDate={selectedDate}
+            summariesByDate={summariesByDate}
+            today={today}
+            yesterday={yesterday}
+          />
+          <p className="mt-3 border-t border-border pt-3 text-[11px] leading-4 text-text-muted">
+            Red dots mark dates with findings. Today is audited tomorrow.
+          </p>
         </div>
       </section>
 
@@ -340,6 +459,15 @@ export function AuditCalendarWorkspace() {
       ) : (
         <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_17rem]">
           <div className="grid min-w-0 gap-4">
+            <AuditDayOverview
+              date={selectedDate}
+              isLatestCompleted={selectedDate === yesterday}
+              isPending={selectedDate >= today}
+              loading={dailySummaryLoading}
+              scopeLabel={stations.find((station) => station.id === stationId)?.name ?? "All stations"}
+              summary={selectedSummary}
+              summaries={dailySummaries}
+            />
             <StationDateSummary date={selectedDate} summaries={dailySummaries} />
             {detailsLoaded ? (
               <AuditDetails date={selectedDate} rangeRows={rangeRows} missingRows={missingRows} />
@@ -357,7 +485,7 @@ export function AuditCalendarWorkspace() {
                   onClick={() => void loadAuditDetails()}
                   type="button"
                 >
-                  {detailLoading ? "Loading details..." : "Load detailed audits"}
+                  {detailLoading ? "Loading audit logs..." : "Load audit logs"}
                 </button>
               </section>
             )}
@@ -371,6 +499,98 @@ export function AuditCalendarWorkspace() {
           />
         </div>
       )}
+    </div>
+  );
+}
+
+function AuditDayOverview({
+  date,
+  isLatestCompleted,
+  isPending,
+  loading,
+  scopeLabel,
+  summary,
+  summaries,
+}: {
+  date: string;
+  isLatestCompleted: boolean;
+  isPending: boolean;
+  loading: boolean;
+  scopeLabel: string;
+  summary?: CalendarSummary;
+  summaries: DailySummary[];
+}) {
+  const stationCount = summaries.length;
+  const attentionCount = summaries.filter(needsAttention).length;
+  const hasMissingAttention = summaries.some(hasMissingAttentionForStation);
+  const missingCount = summary?.missingCount
+    ?? summaries.reduce((total, station) => total + station.missingCount, 0);
+  const rangeViolationCount = summary?.rangeViolationCount
+    ?? summaries.reduce((total, station) => total + station.rangeViolationCount, 0);
+  const hasFindings = attentionCount > 0;
+  const hasReport = Boolean(summary);
+
+  return (
+    <section className="panel p-0" aria-live="polite">
+      <div className="flex flex-col gap-3 border-b border-border px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex min-w-0 items-start gap-3">
+          <span className={`mt-0.5 rounded-full p-2 ${
+            loading || !hasReport
+              ? "bg-bg-raised text-text-secondary"
+              : hasFindings
+                ? "bg-warning-bg text-warning"
+                : "bg-success-bg text-success"
+          }`}>
+            {loading || !hasReport
+              ? <CalendarDays className="h-4 w-4" aria-hidden="true" />
+              : hasFindings
+                ? <TriangleAlert className="h-4 w-4" aria-hidden="true" />
+                : <CheckCircle2 className="h-4 w-4" aria-hidden="true" />}
+          </span>
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="text-base font-semibold text-text-primary">{formatDate(date)}</h2>
+              {isLatestCompleted ? <span className="status-chip">Latest completed audit</span> : null}
+            </div>
+            <p className="mt-1 text-xs text-text-secondary">
+              {loading
+                ? `Loading the completed station summary for ${scopeLabel}...`
+                : hasReport
+                  ? `${scopeLabel} · ${hasFindings ? "Findings require attention" : "Within acceptable limits"}`
+                  : isPending
+                    ? `${scopeLabel} · This date will be audited the following day`
+                    : `${scopeLabel} · No audit report recorded for this date`}
+            </p>
+          </div>
+        </div>
+        <span className="inline-flex items-center gap-1.5 text-xs text-text-muted">
+          <CalendarDays className="h-3.5 w-3.5" aria-hidden="true" />
+          Selected date
+        </span>
+      </div>
+      <div className="grid grid-cols-2 gap-px bg-border sm:grid-cols-4">
+        <AuditOverviewStat label="Stations" value={loading ? "—" : stationCount} />
+        <AuditOverviewStat label="Need attention" value={loading ? "—" : attentionCount} emphasis={attentionCount > 0} />
+        <AuditOverviewStat label="Missing records" value={loading ? "—" : missingCount} emphasis={hasMissingAttention} />
+        <AuditOverviewStat label="Range violations" value={loading ? "—" : rangeViolationCount} emphasis={rangeViolationCount > 0} />
+      </div>
+    </section>
+  );
+}
+
+function AuditOverviewStat({
+  emphasis = false,
+  label,
+  value,
+}: {
+  emphasis?: boolean;
+  label: string;
+  value: number | string;
+}) {
+  return (
+    <div className="bg-bg-surface px-4 py-3">
+      <p className="text-[11px] font-semibold uppercase tracking-wide text-text-muted">{label}</p>
+      <p className={`mt-1 font-mono text-xl font-semibold ${emphasis ? "text-danger" : "text-text-primary"}`}>{value}</p>
     </div>
   );
 }
@@ -400,45 +620,74 @@ function CompactDateNavigator({
         </div>
         <span className="status-chip">{Number(selectedDate.slice(-2))}</span>
       </div>
-      <div className="grid grid-cols-7 gap-1" role="grid">
-        {WEEKDAYS.map((day) => (
-          <span className="py-1 text-center text-[10px] font-semibold text-text-muted" key={day} role="columnheader">
-            {day.slice(0, 1)}
-          </span>
-        ))}
-        {calendarDays.map((day) => {
-          const summary = day.date ? summariesByDate.get(day.date) : undefined;
-          const selected = day.date === selectedDate;
-          const hasFindings = Boolean(summary && (summary.missingCount || summary.rangeViolationCount));
-          return day.date ? (
-            <button
-              aria-current={selected ? "date" : undefined}
-              aria-label={`${formatDate(day.date)}${hasFindings ? ", has findings" : ""}`}
-              className={`relative flex aspect-square items-center justify-center rounded text-xs font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent ${
-                selected
-                  ? "bg-accent text-white"
-                  : "text-text-secondary hover:bg-bg-raised hover:text-text-primary"
-              }`}
-              key={day.key}
-              onClick={() => onSelectDate(day.date!)}
-              role="gridcell"
-              type="button"
-            >
-              {day.dayNumber}
-              {hasFindings ? (
-                <span
-                  aria-hidden="true"
-                  className={`absolute bottom-1 h-1 w-1 rounded-full ${selected ? "bg-white" : "bg-danger"}`}
-                />
-              ) : null}
-            </button>
-          ) : <span aria-hidden="true" key={day.key} role="gridcell" />;
-        })}
-      </div>
+      <CompactMonthGrid
+        calendarDays={calendarDays}
+        onSelectDate={onSelectDate}
+        selectedDate={selectedDate}
+        summariesByDate={summariesByDate}
+      />
       <p className="mt-3 border-t border-border pt-2 text-[11px] leading-4 text-text-muted">
         Dates with findings are marked with a dot.
       </p>
     </aside>
+  );
+}
+
+function CompactMonthGrid({
+  calendarDays,
+  onSelectDate,
+  selectedDate,
+  summariesByDate,
+  today,
+  yesterday,
+}: {
+  calendarDays: ReturnType<typeof buildCalendarDays>;
+  onSelectDate: (date: string) => void;
+  selectedDate: string | null;
+  summariesByDate: Map<string, CalendarSummary>;
+  today?: string;
+  yesterday?: string;
+}) {
+  return (
+    <div className="grid grid-cols-7 gap-1" role="grid">
+      {WEEKDAYS.map((day) => (
+        <span className="py-1 text-center text-[10px] font-semibold text-text-muted" key={day} role="columnheader">
+          {day.slice(0, 1)}
+        </span>
+      ))}
+      {calendarDays.map((day) => {
+        const summary = day.date ? summariesByDate.get(day.date) : undefined;
+        const selected = day.date === selectedDate;
+        const hasFindings = summary?.stationSummaries.some(needsAttention) ?? false;
+        const relativeLabel = day.date === yesterday
+          ? ", latest completed audit"
+          : day.date === today
+            ? ", audited tomorrow"
+            : "";
+        return day.date ? (
+          <button
+            aria-current={selected ? "date" : undefined}
+            aria-label={`${formatDate(day.date)}${hasFindings ? ", has findings" : ""}${relativeLabel}`}
+            className={`relative flex aspect-square items-center justify-center rounded text-xs font-medium transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent ${
+              selected
+                ? "bg-accent text-[#111318]"
+                : day.date === yesterday
+                  ? "ring-1 ring-inset ring-accent text-text-primary hover:bg-bg-raised"
+                  : "text-text-secondary hover:bg-bg-raised hover:text-text-primary"
+            }`}
+            key={day.key}
+            onClick={() => onSelectDate(day.date!)}
+            role="gridcell"
+            type="button"
+          >
+            {day.dayNumber}
+            {hasFindings ? (
+              <span aria-hidden="true" className="absolute bottom-1 h-1 w-1 rounded-full bg-danger" />
+            ) : null}
+          </button>
+        ) : <span aria-hidden="true" key={day.key} role="gridcell" />;
+      })}
+    </div>
   );
 }
 
@@ -468,7 +717,7 @@ function StationDateSummary({ date, summaries }: { date: string; summaries: Dail
           </thead>
           <tbody>
             {sortedSummaries.length ? sortedSummaries.map((summary) => {
-              const issueCount = summary.missingCount + summary.rangeViolationCount;
+              const requiresAttention = needsAttention(summary);
               const violationsByMetric = readRangeViolationSummary(summary.rangeViolationSummary);
               return (
                 <tr key={summary.stationId}>
@@ -476,7 +725,18 @@ function StationDateSummary({ date, summaries }: { date: string; summaries: Dail
                     <span className="font-medium text-text-primary">{summary.stationName}</span><br />
                     <span className="font-mono text-xs text-text-muted">{summary.stationId}</span>
                   </td>
-                  <td><span className={summary.missingCount ? "count-chip" : "text-text-muted"}>{summary.missingCount}</span></td>
+                  <td>
+                    <span
+                      className={summary.missingCount
+                        ? `count-chip ${hasMissingAttentionForStation(summary) ? "count-chip-caution" : ""}`
+                        : "text-text-muted"}
+                      title={summary.missingCount > 0 && !hasMissingAttentionForStation(summary)
+                        ? "Within tolerance: fewer than 100 missing records"
+                        : undefined}
+                    >
+                      {summary.missingCount}
+                    </span>
+                  </td>
                   <td><span className={summary.rangeViolationCount ? "count-chip count-chip-danger" : "text-text-muted"}>{summary.rangeViolationCount}</span></td>
                   <td>
                     {violationsByMetric.length ? (
@@ -490,8 +750,11 @@ function StationDateSummary({ date, summaries }: { date: string; summaries: Dail
                     ) : <span className="text-text-muted">-</span>}
                   </td>
                   <td>
-                    <span className={issueCount ? "count-chip count-chip-caution" : "count-chip"}>
-                      {issueCount ? "Attention" : "Clear"}
+                    <span className={`inline-flex items-center gap-1.5 font-medium ${requiresAttention ? "text-warning" : "text-success"}`}>
+                      {requiresAttention
+                        ? <TriangleAlert className="h-3.5 w-3.5" aria-hidden="true" />
+                        : <CheckCircle2 className="h-3.5 w-3.5" aria-hidden="true" />}
+                      {requiresAttention ? "Attention" : "Clear"}
                     </span>
                   </td>
                 </tr>
@@ -510,6 +773,14 @@ function getStationGroup(stationName: string) {
   return stationName.split("-").at(-1)?.trim() ?? stationName;
 }
 
+function hasMissingAttentionForStation(summary: Pick<DailySummary, "missingCount">) {
+  return summary.missingCount >= MISSING_ATTENTION_THRESHOLD;
+}
+
+function needsAttention(summary: Pick<DailySummary, "missingCount" | "rangeViolationCount">) {
+  return hasMissingAttentionForStation(summary) || summary.rangeViolationCount > 0;
+}
+
 function AuditDetails({
   date,
   rangeRows,
@@ -521,6 +792,7 @@ function AuditDetails({
 }) {
   const [tableMode, setTableMode] = useState<"normal" | "full">("normal");
   const [auditStationId, setAuditStationId] = useState("");
+  const missingAttentionRows = missingRows.filter(hasMissingAttentionForStation);
   const auditStations = useMemo(() => getRangeAuditStations(rangeRows), [rangeRows]);
   const selectedAuditStationId = auditStations.some((station) => station.id === auditStationId)
     ? auditStationId
@@ -628,14 +900,23 @@ function AuditDetails({
         <div className="flex items-center justify-between gap-3">
           <div>
             <h2 className="panel-title">Data Quality</h2>
-            <p className="mt-1 text-xs text-text-secondary">Missing-data findings recorded for this date.</p>
+            <p className="mt-1 text-xs text-text-secondary">
+              Missing-data findings for this date. Fewer than 100 missing records per station is within tolerance.
+            </p>
           </div>
-          <span className="count-chip">{missingRows.length} stations</span>
+          <span className={missingAttentionRows.length ? "count-chip count-chip-caution" : "count-chip"}>
+            {missingAttentionRows.length} need attention
+          </span>
         </div>
         <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
           {missingRows.length ? missingRows.map((summary) => (
             <div className="event-row" key={summary.stationId}>
-              <p className="text-sm font-medium text-text-primary">{summary.stationName}</p>
+              <div className="flex items-start justify-between gap-3">
+                <p className="text-sm font-medium text-text-primary">{summary.stationName}</p>
+                <span className={hasMissingAttentionForStation(summary) ? "count-chip count-chip-caution" : "count-chip"}>
+                  {hasMissingAttentionForStation(summary) ? "Attention" : "Within tolerance"}
+                </span>
+              </div>
               <p className="mt-1 text-xs text-text-secondary">{summary.missingCount} missing records</p>
             </div>
           )) : <p className="text-sm text-text-muted">No missing data recorded.</p>}
@@ -738,15 +1019,23 @@ function buildCalendarDays(monthKey: string) {
   });
 }
 
-function getCurrentPhtMonth() {
+function getCurrentPhtDate() {
   const parts = new Intl.DateTimeFormat("en", {
     timeZone: "Asia/Manila",
     year: "numeric",
     month: "2-digit",
+    day: "2-digit",
   }).formatToParts(new Date());
   const year = parts.find((part) => part.type === "year")?.value;
   const month = parts.find((part) => part.type === "month")?.value;
-  return `${year}-${month}`;
+  const day = parts.find((part) => part.type === "day")?.value;
+  return `${year}-${month}-${day}`;
+}
+
+function offsetDate(dateKey: string, offset: number) {
+  const [year, month, day] = dateKey.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day + offset));
+  return date.toISOString().slice(0, 10);
 }
 
 function offsetMonth(monthKey: string, offset: number) {

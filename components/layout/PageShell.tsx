@@ -15,9 +15,9 @@ export type PageNavLink = {
 };
 
 const NAV_LINKS: PageNavLink[] = [
-  { href: "/", label: "Dashboard" },
+  { href: "/", label: "Audit" },
+  { href: "/investigate", label: "Custom Investigation" },
   { href: "/pubmat", label: "Daily Readings" },
-  { href: "/audit", label: "Audit" },
   { href: "/config", label: "Config" },
   { href: "/architecture", label: "Architecture" },
 ];
@@ -63,7 +63,7 @@ function AppTopbar() {
   return (
     <header className="fixed inset-x-0 top-0 z-40 h-12 border-b border-border bg-background">
       <div className="flex h-full w-full items-center gap-3 px-3 md:px-5">
-        <Link className="flex min-w-0 shrink-0 items-center gap-2" href="/" aria-label="Kloudvestigate dashboard">
+        <Link className="flex min-w-0 shrink-0 items-center gap-2" href="/" aria-label="Kloudvestigate audit log">
           <span className="relative h-6 w-6 overflow-hidden rounded-[4px]">
             <Image
               src="/kloudvestigate_logo.png"
