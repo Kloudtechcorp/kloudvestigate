@@ -520,7 +520,18 @@ function AuditDetails({
   missingRows: DailySummary[];
 }) {
   const [tableMode, setTableMode] = useState<"normal" | "full">("normal");
-  const pivotedAudit = useMemo(() => buildRangeViolationPivot(rangeRows), [rangeRows]);
+  const [auditStationId, setAuditStationId] = useState("");
+  const auditStations = useMemo(() => getRangeAuditStations(rangeRows), [rangeRows]);
+  const selectedAuditStationId = auditStations.some((station) => station.id === auditStationId)
+    ? auditStationId
+    : "";
+  const visibleRangeRows = useMemo(
+    () => selectedAuditStationId
+      ? rangeRows.filter((row) => row.stationId === selectedAuditStationId)
+      : rangeRows,
+    [rangeRows, selectedAuditStationId],
+  );
+  const pivotedAudit = useMemo(() => buildRangeViolationPivot(visibleRangeRows), [visibleRangeRows]);
   const tablePanelClass = tableMode === "full"
     ? "panel fixed inset-x-4 top-16 bottom-4 z-30 overflow-hidden p-0"
     : "panel min-w-0 overflow-hidden p-0";
@@ -534,8 +545,22 @@ function AuditDetails({
             <h2 className="panel-title">Acceptable Range Audit</h2>
             <p className="mt-1 text-xs text-text-secondary">Violations grouped by station and recorded timestamp for {formatDate(date)}.</p>
           </div>
-          <div className="flex items-center gap-2">
-            <span className="count-chip count-chip-danger">{rangeRows.length} violations</span>
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-text-secondary">
+              Station
+              <select
+                aria-label="Filter acceptable range audit by station"
+                className="field min-w-44 normal-case"
+                onChange={(event) => setAuditStationId(event.target.value)}
+                value={selectedAuditStationId}
+              >
+                <option value="">All stations</option>
+                {auditStations.map((station) => (
+                  <option key={station.id} value={station.id}>{station.name}</option>
+                ))}
+              </select>
+            </label>
+            <span className="count-chip count-chip-danger">{visibleRangeRows.length} violations</span>
             <span className="count-chip">{pivotedAudit.rows.length} timestamps</span>
             <button
               aria-label="Minimize acceptable range audit"
@@ -628,6 +653,16 @@ function readRowContents(value: unknown): { metric?: string; timestamp?: string;
     timestamp: typeof row.timestamp === "string" ? row.timestamp : undefined,
     value: typeof row.value === "number" ? row.value : undefined,
   };
+}
+
+function getRangeAuditStations(rangeRows: Array<AuditLog & { stationId: string; stationName: string }>) {
+  const stations = new Map<string, StationOption>();
+
+  for (const row of rangeRows) {
+    stations.set(row.stationId, { id: row.stationId, name: row.stationName });
+  }
+
+  return Array.from(stations.values()).sort((a, b) => a.name.localeCompare(b.name));
 }
 
 function buildRangeViolationPivot(rangeRows: Array<AuditLog & { stationId: string; stationName: string }>) {
