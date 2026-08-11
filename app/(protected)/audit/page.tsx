@@ -1,14 +1,16 @@
-import { AuditCalendarWorkspace } from "@/components/audit/AuditCalendarWorkspace";
-import { PageShell } from "@/components/layout/PageShell";
+import { redirect } from "next/navigation";
 
-export default function AuditPage() {
-  return (
-    <PageShell
-      eyebrow="Historical monitoring"
-      title="Station Audit Calendar"
-      description="Review daily missing-data and acceptable-range findings from scheduled station investigations."
-    >
-      <AuditCalendarWorkspace />
-    </PageShell>
-  );
+type AuditPageProps = {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+};
+
+export default async function AuditPage({ searchParams }: AuditPageProps) {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(await searchParams)) {
+    for (const item of Array.isArray(value) ? value : value ? [value] : []) {
+      params.append(key, item);
+    }
+  }
+
+  redirect(params.size ? `/?${params.toString()}` : "/");
 }
