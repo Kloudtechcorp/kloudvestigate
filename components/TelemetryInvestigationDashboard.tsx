@@ -235,7 +235,7 @@ export function TelemetryInvestigationDashboard() {
       title="Custom Investigation"
       description="Inspect a specific station, metric, and timeframe when the daily audit needs deeper analysis."
     >
-      <main className="grid min-w-0 gap-4 lg:grid-cols-[minmax(340px,380px)_minmax(0,1fr)] 2xl:grid-cols-[minmax(380px,420px)_minmax(0,1fr)]">
+      <main className="grid min-w-0 gap-4 lg:grid-cols-[minmax(380px,440px)_minmax(0,1fr)] 2xl:grid-cols-[minmax(420px,480px)_minmax(0,1fr)]">
         <InvestigationScopePanel
           stations={stations}
           stationId={stationId}

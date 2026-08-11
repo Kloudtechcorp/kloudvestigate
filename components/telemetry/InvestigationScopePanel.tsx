@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useSyncExternalStore } from "react";
+import { useState, type ReactNode } from "react";
+import { ChevronDown, ExternalLink, Focus, ListChecks } from "lucide-react";
 import type { InvestigationMetricKey, StationMetadata } from "@/lib/telemetry-types";
 import type { InvestigationResponse, MetricOption } from "./types";
 
@@ -45,7 +46,56 @@ type InvestigationScopePanelProps = {
   sourceLabel?: string;
 };
 
+type SingleStationInvestigationProps = Pick<
+  InvestigationScopePanelProps,
+  | "stations"
+  | "stationId"
+  | "metric"
+  | "metrics"
+  | "start"
+  | "end"
+  | "aggregationMinutes"
+  | "onStationChange"
+  | "onMetricChange"
+  | "onStartChange"
+  | "onEndChange"
+  | "onAggregationChange"
+  | "onRunInvestigation"
+  | "runInvestigationBusy"
+  | "runInvestigationDisabled"
+  | "sourceLabel"
+>;
+
 export function InvestigationScopePanel(props: InvestigationScopePanelProps) {
+  return (
+    <aside className="grid min-w-0 gap-4 self-start lg:sticky lg:top-16 lg:max-h-[calc(100dvh-5rem)] lg:overflow-y-auto lg:overscroll-contain lg:pb-1 lg:pr-2 lg:[scrollbar-gutter:stable]">
+      <SingleStationInvestigationCard {...props} />
+      {props.onQuickInvestigateEveryStation ? <BatchStationInvestigationCard {...props} /> : null}
+      <RelatedShortcutsCard />
+    </aside>
+  );
+}
+
+function SingleStationInvestigationCard(props: SingleStationInvestigationProps) {
+  return (
+    <CollapsiblePanel
+      badge="1 station"
+      description="Inspect one station using a specific metric, timeframe, and aggregation."
+      icon={<Focus className="h-4 w-4" aria-hidden="true" />}
+      iconTone="accent"
+      panelId="single-investigation"
+      title="Single Station Investigation"
+    >
+      <div className="grid gap-4">
+        <ScopeFields {...props} />
+        <RunInvestigationControl {...props} />
+        <EnvironmentLine sourceLabel={props.sourceLabel} />
+      </div>
+    </CollapsiblePanel>
+  );
+}
+
+function BatchStationInvestigationCard(props: InvestigationScopePanelProps) {
   const {
     stations,
     stationId,
@@ -64,54 +114,99 @@ export function InvestigationScopePanel(props: InvestigationScopePanelProps) {
     onBatchStartChange,
     onBatchEndChange,
     onBatchAggregationChange,
-    sourceLabel,
   } = props;
   const hasQuickActionResults = quickActionBusy || Object.keys(quickActionResultsByStationId).length > 0;
-  const batchControlsMounted = useHydrated();
+  if (!onQuickInvestigateEveryStation) return null;
 
   return (
-    <aside className="panel h-fit overflow-hidden p-0 lg:sticky lg:top-16 lg:max-h-[calc(100vh-64px)] lg:overflow-y-auto">
-      <div className="border-b border-border bg-bg-raised px-4 py-2">
-        <h2 className="text-[11px] font-semibold uppercase tracking-wide text-text-muted">Scope</h2>
+    <CollapsiblePanel
+      badge="Multi-station"
+      description="Compare the same investigation window across several stations in one run."
+      icon={<ListChecks className="h-4 w-4" aria-hidden="true" />}
+      panelId="batch-investigation"
+      title="Batch Station Investigation"
+    >
+      <div className="min-w-0">
+        <StationBatchSection
+          stations={stations}
+          stationId={stationId}
+          onStationChange={onStationChange}
+          onQuickInvestigateEveryStation={onQuickInvestigateEveryStation}
+          quickActionBusy={quickActionBusy}
+          quickActionProgress={quickActionProgress}
+          quickActionResultsByStationId={quickActionResultsByStationId}
+          hasQuickActionResults={hasQuickActionResults}
+          customScopeEnabled={batchCustomScopeEnabled}
+          customStart={batchStart}
+          customEnd={batchEnd}
+          customAggregationMinutes={batchAggregationMinutes}
+          selectedStationIds={batchStationIds}
+          onSelectedStationIdsChange={onBatchStationIdsChange}
+          onCustomScopeEnabledChange={onBatchCustomScopeEnabledChange}
+          onCustomStartChange={onBatchStartChange}
+          onCustomEndChange={onBatchEndChange}
+          onCustomAggregationChange={onBatchAggregationChange}
+        />
       </div>
-      <div className="grid gap-4 px-4 py-4">
-        <ScopeFields {...props} />
-        <RunInvestigationControl {...props} />
-        <QuickCommandsSection />
-        {onQuickInvestigateEveryStation ? (
-          <details className="border-t border-border pt-3">
-            <summary className="cursor-pointer list-none text-xs font-semibold uppercase tracking-wide text-text-muted">
-              Station Batch
-            </summary>
-            {batchControlsMounted ? (
-              <StationBatchSection
-                stations={stations}
-                stationId={stationId}
-                onStationChange={onStationChange}
-                onQuickInvestigateEveryStation={onQuickInvestigateEveryStation}
-                quickActionBusy={quickActionBusy}
-                quickActionProgress={quickActionProgress}
-                quickActionResultsByStationId={quickActionResultsByStationId}
-                hasQuickActionResults={hasQuickActionResults}
-                customScopeEnabled={batchCustomScopeEnabled}
-                customStart={batchStart}
-                customEnd={batchEnd}
-                customAggregationMinutes={batchAggregationMinutes}
-                selectedStationIds={batchStationIds}
-                onSelectedStationIdsChange={onBatchStationIdsChange}
-                onCustomScopeEnabledChange={onBatchCustomScopeEnabledChange}
-                onCustomStartChange={onBatchStartChange}
-                onCustomEndChange={onBatchEndChange}
-                onCustomAggregationChange={onBatchAggregationChange}
-              />
-            ) : (
-              <StationBatchPlaceholder />
-            )}
-          </details>
+    </CollapsiblePanel>
+  );
+}
+
+function CollapsiblePanel({
+  badge,
+  children,
+  defaultExpanded = true,
+  description,
+  icon,
+  iconTone = "neutral",
+  panelId,
+  title,
+}: {
+  badge?: string;
+  children: ReactNode;
+  defaultExpanded?: boolean;
+  description?: string;
+  icon?: ReactNode;
+  iconTone?: "accent" | "neutral";
+  panelId: string;
+  title: string;
+}) {
+  const [expanded, setExpanded] = useState(defaultExpanded);
+  const contentId = `${panelId}-content`;
+  const titleId = `${panelId}-title`;
+
+  return (
+    <section className="panel min-w-0 shrink-0 overflow-hidden p-0" aria-labelledby={titleId}>
+      <button
+        aria-controls={contentId}
+        aria-expanded={expanded}
+        className="flex w-full items-start gap-3 bg-bg-raised px-4 py-3 text-left hover:bg-bg-surface focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-accent"
+        onClick={() => setExpanded((current) => !current)}
+        type="button"
+      >
+        {icon ? (
+          <span className={`mt-0.5 rounded-[4px] p-2 ${
+            iconTone === "accent"
+              ? "bg-accent text-[#111318]"
+              : "bg-bg-surface text-text-primary ring-1 ring-border"
+          }`}>
+            {icon}
+          </span>
         ) : null}
-        <EnvironmentLine sourceLabel={sourceLabel} />
-      </div>
-    </aside>
+        <span className="min-w-0 flex-1">
+          <span className="flex flex-wrap items-center justify-between gap-2">
+            <span className="text-sm font-semibold text-text-primary" id={titleId}>{title}</span>
+            {badge ? <span className="status-chip">{badge}</span> : null}
+          </span>
+          {description ? <span className="mt-1 block text-xs leading-5 text-text-secondary">{description}</span> : null}
+        </span>
+        <ChevronDown
+          aria-hidden="true"
+          className={`mt-1 h-4 w-4 shrink-0 text-text-muted transition-transform ${expanded ? "rotate-180" : ""}`}
+        />
+      </button>
+      {expanded ? <div className="border-t border-border p-4" id={contentId}>{children}</div> : null}
+    </section>
   );
 }
 
@@ -138,49 +233,50 @@ function ScopeFields({
   onStartChange,
   onEndChange,
   onAggregationChange,
-}: InvestigationScopePanelProps) {
+}: SingleStationInvestigationProps) {
   return (
-    <section className="grid gap-3">
-      <label className="field-label">
-        Station
-        {stations.length ? (
-          <select className="field" value={stationId} onChange={(event) => onStationChange(event.target.value)}>
-            {stations.map((station) => (
-              <option key={station.id} value={station.id}>{station.name}</option>
-            ))}
-          </select>
-        ) : (
-          <span className="h-8 w-full animate-pulse rounded-[4px] bg-bg-raised" />
-        )}
-      </label>
-
-      <label className="field-label">
-        Metric
-        <select className="field" value={metric} onChange={(event) => onMetricChange(event.target.value as InvestigationMetricKey)}>
-          {metrics.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
-        </select>
-      </label>
-
+    <section className="grid gap-4">
       <div className="grid gap-3">
+        <p className="text-xs font-semibold uppercase tracking-wide text-text-secondary">Target</p>
         <label className="field-label">
-          Start
-          <span className="flex items-center gap-2">
-            <input className="field min-w-0 flex-1" type="datetime-local" value={start} onChange={(event) => onStartChange(event.target.value)} />
-            <span className="status-chip">PHT</span>
-          </span>
+          Station
+          {stations.length ? (
+            <select className="field" value={stationId} onChange={(event) => onStationChange(event.target.value)}>
+              {stations.map((station) => (
+                <option key={station.id} value={station.id}>{station.name}</option>
+              ))}
+            </select>
+          ) : (
+            <span className="h-8 w-full animate-pulse rounded-[4px] bg-bg-raised" />
+          )}
         </label>
+
         <label className="field-label">
-          End
-          <span className="flex items-center gap-2">
-            <input className="field min-w-0 flex-1" type="datetime-local" value={end} onChange={(event) => onEndChange(event.target.value)} />
-            <span className="status-chip">PHT</span>
-          </span>
+          Metric
+          <select className="field" value={metric} onChange={(event) => onMetricChange(event.target.value as InvestigationMetricKey)}>
+            {metrics.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+          </select>
         </label>
       </div>
 
-      <div className="grid gap-1">
-        <span className="field-label">Aggregation</span>
-        <div className="grid grid-cols-3 gap-1">
+      <div className="grid gap-3 border-t border-border pt-4">
+        <div className="flex items-center justify-between gap-3">
+          <p className="text-xs font-semibold uppercase tracking-wide text-text-secondary">Time range</p>
+          <span className="status-chip">PHT</span>
+        </div>
+        <label className="field-label">
+          Start
+          <input className="field min-w-0" type="datetime-local" value={start} onChange={(event) => onStartChange(event.target.value)} />
+        </label>
+        <label className="field-label">
+          End
+          <input className="field min-w-0" type="datetime-local" value={end} onChange={(event) => onEndChange(event.target.value)} />
+        </label>
+      </div>
+
+      <div className="grid gap-2 border-t border-border pt-4">
+        <span className="text-xs font-semibold uppercase tracking-wide text-text-secondary">Aggregation</span>
+        <div className="grid grid-cols-4 gap-1">
           {aggregationOptions.map((option) => (
             <button
               className={`h-7 rounded-[3px] border px-2 text-xs font-medium ${
@@ -205,7 +301,7 @@ function RunInvestigationControl({
   onRunInvestigation,
   runInvestigationBusy,
   runInvestigationDisabled,
-}: InvestigationScopePanelProps) {
+}: SingleStationInvestigationProps) {
   return (
     <button
       className="primary-action h-9 w-full"
@@ -218,14 +314,14 @@ function RunInvestigationControl({
           <span className="h-4 w-4 animate-spin rounded-full border-2 border-[#111318] border-t-transparent" />
           Running...
         </span>
-      ) : "Run investigation"}
+      ) : "Run single-station investigation"}
     </button>
   );
 }
 
 function EnvironmentLine({ sourceLabel }: { sourceLabel?: string }) {
   return (
-    <div className="flex flex-wrap gap-x-3 gap-y-1 border-t border-border pt-3 text-xs text-text-muted">
+    <div className="flex flex-wrap gap-x-3 gap-y-1 border-t border-border pt-3 text-[11px] text-text-muted">
       <span>
         ENV: <span className="font-mono">{sourceLabel?.includes("KloudTrack") ? "production" : "demo"}</span>
       </span>
@@ -236,40 +332,23 @@ function EnvironmentLine({ sourceLabel }: { sourceLabel?: string }) {
   );
 }
 
-function QuickCommandsSection() {
+function RelatedShortcutsCard() {
   return (
-    <div className="border-t border-border pt-3">
-      <p className="text-xs font-semibold uppercase tracking-[0.14em] text-label">Quick commands</p>
+    <CollapsiblePanel
+      defaultExpanded={false}
+      icon={<ExternalLink className="h-4 w-4" aria-hidden="true" />}
+      panelId="related-shortcuts"
+      title="Related Shortcuts"
+    >
       <div className="mt-3 grid gap-2">
         {quickCommands.map((item) => (
-          <Link className="quick-link-button" href={item.href} key={item.href}>
-            {item.label}
+          <Link className="quick-link-button flex items-center justify-between gap-3" href={item.href} key={item.href}>
+            <span>{item.label}</span>
+            <ExternalLink className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
           </Link>
         ))}
       </div>
-    </div>
-  );
-}
-
-function useHydrated() {
-  return useSyncExternalStore(
-    () => () => {},
-    () => true,
-    () => false,
-  );
-}
-
-function StationBatchPlaceholder() {
-  return (
-    <div className="mt-3">
-      <div className="mt-3 rounded-[6px] border border-border-subtle bg-surface p-3">
-        <p className="text-sm font-semibold text-card-foreground">Batch stations</p>
-        <p className="mt-2 text-xs leading-5 text-label">Loading station selection</p>
-      </div>
-      <button className="primary-action mt-3 w-full" type="button" disabled>
-        Loading batch controls
-      </button>
-    </div>
+    </CollapsiblePanel>
   );
 }
 
@@ -331,12 +410,31 @@ function StationBatchSection({
   }
 
   return (
-    <div className="mt-3">
+    <div className="grid min-w-0 gap-4">
+      <div className={`rounded-[4px] border px-3 py-2 ${
+        customScopeEnabled
+          ? "border-accent bg-accent-subtle"
+          : "border-border bg-bg-raised"
+      }`}>
+        <p className="text-[10px] font-semibold uppercase tracking-wide text-text-muted">
+          {customScopeEnabled ? "Custom batch scope" : "Default batch scope"}
+        </p>
+        <p className="mt-1 text-xs leading-5 text-text-secondary">
+          {customScopeEnabled
+            ? "Custom range · all metrics · selected interval"
+            : "Yesterday · full day · all metrics · 1-minute aggregation"}
+        </p>
+      </div>
       {onSelectedStationIdsChange ? (
-        <div className="mt-3 rounded-[6px] border border-border-subtle bg-surface p-3">
-          <div className="flex items-center justify-between gap-3">
-            <p className="text-sm font-semibold text-card-foreground">Batch stations</p>
-            <span className="text-xs text-label">{selectedCount}/{stations.length}</span>
+        <section className="min-w-0" aria-labelledby="batch-station-selection-title">
+          <div className="flex min-w-0 flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0 flex-1">
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-text-secondary" id="batch-station-selection-title">
+                Station selection
+              </h3>
+              <p className="mt-1 text-xs text-text-muted">Choose which stations to include in this run.</p>
+            </div>
+            <span className="status-chip">{selectedCount}/{stations.length} selected</span>
           </div>
           <div className="mt-3 flex flex-wrap gap-2">
             <button
@@ -379,12 +477,17 @@ function StationBatchSection({
               <p className="px-3 py-2 text-sm text-label">Loading stations</p>
             )}
           </div>
-        </div>
+        </section>
       ) : null}
       {canEditCustomScope ? (
-        <div className="mt-3 rounded-[6px] border border-border-subtle bg-surface p-3">
+        <section className="border-t border-border pt-4" aria-labelledby="batch-timeframe-title">
           <label className="flex items-center justify-between gap-3 text-sm font-medium text-card-foreground">
-            <span>Custom batch scope</span>
+            <span>
+              <span className="block text-xs font-semibold uppercase tracking-wide text-text-secondary" id="batch-timeframe-title">
+                Timeframe
+              </span>
+              <span className="mt-1 block text-xs font-normal text-text-muted">Override yesterday&apos;s default range.</span>
+            </span>
             <input
               className="h-4 w-4 accent-primary"
               type="checkbox"
@@ -394,19 +497,19 @@ function StationBatchSection({
           </label>
           {customScopeEnabled ? (
             <div className="mt-3 grid gap-3">
-              <label className="field-label">
+              <label className="field-label min-w-0">
                 Batch start (PH)
                 <input
-                  className="field"
+                  className="field min-w-0"
                   type="datetime-local"
                   value={customStart ?? ""}
                   onChange={(event) => onCustomStartChange?.(event.target.value)}
                 />
               </label>
-              <label className="field-label">
+              <label className="field-label min-w-0">
                 Batch end (PH)
                 <input
-                  className="field"
+                  className="field min-w-0"
                   type="datetime-local"
                   value={customEnd ?? ""}
                   onChange={(event) => onCustomEndChange?.(event.target.value)}
@@ -430,23 +533,23 @@ function StationBatchSection({
               </label>
             </div>
           ) : null}
-        </div>
+        </section>
       ) : null}
-      <button
-        className="primary-action mt-3 w-full"
-        type="button"
-        onClick={onQuickInvestigateEveryStation}
-        disabled={batchDisabled}
-      >
-        {quickActionBusy
-          ? `Investigating selected stations${quickActionProgress ? ` (${quickActionProgress})` : ""}`
-          : `Investigate selected stations (${selectedCount})`}
-      </button>
-      <p className="mt-2 text-xs leading-5 text-label">
-        {customScopeEnabled
-          ? "Custom range, all metrics, selected interval, selected stations only, throttled to 3 requests per second."
-          : "Yesterday, full day, all metrics, 1-minute aggregation, selected stations only, throttled to 3 requests per second."}
-      </p>
+      <div className="border-t border-border pt-4">
+        <button
+          className="primary-action w-full"
+          type="button"
+          onClick={onQuickInvestigateEveryStation}
+          disabled={batchDisabled}
+        >
+          {quickActionBusy
+            ? `Investigating selected stations${quickActionProgress ? ` (${quickActionProgress})` : ""}`
+            : `Run batch investigation (${selectedCount})`}
+        </button>
+        <p className="mt-2 text-xs leading-5 text-text-muted">
+          Requests are throttled to 3 per second. Results appear below and can be opened in the main workspace.
+        </p>
+      </div>
       {hasQuickActionResults ? (
         <StationBatchSummary
           stations={stations}
