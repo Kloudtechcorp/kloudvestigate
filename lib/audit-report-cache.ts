@@ -1,6 +1,6 @@
 import { unstable_cache, revalidateTag } from "next/cache";
 
-import { prisma } from "@/lib/prisma";
+import { getPrisma } from "@/lib/prisma";
 
 const AUDIT_REPORTS_TAG = "audit-reports";
 const AUDIT_REPORT_REVALIDATE_SECONDS = 5 * 60;
@@ -40,6 +40,7 @@ export function invalidateAllAuditReports() {
 async function loadMonthlyAuditSummaries(month: string, stationId?: string) {
   const range = parseMonth(month);
   if (!range) throw new Error("Month must use YYYY-MM format.");
+  const prisma = getPrisma();
 
   const [rows, stationRows] = await Promise.all([
     prisma.dailyStationSummary.findMany({
@@ -122,6 +123,7 @@ async function loadMonthlyAuditSummaries(month: string, stationId?: string) {
 async function loadDailyAudit(date: string, stationId?: string, includeDetails = false) {
   const summaryDate = parseDate(date);
   if (!summaryDate) throw new Error("Date must use YYYY-MM-DD format.");
+  const prisma = getPrisma();
 
   const summaries = await prisma.dailyStationSummary.findMany({
     where: {

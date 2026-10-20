@@ -6,6 +6,7 @@ import type {
   TelemetryRecord,
 } from "./telemetry-types";
 import { allMetricKeys } from "./metric-profiles";
+import { KloudtrackRequestQueue } from "./kloudtrack-request-queue";
 import {
   resolveKloudtrackEnvironmentConfig,
   type KloudtrackEnvironment,
@@ -16,6 +17,21 @@ const KLOUDTRACK_REQUEST_TIMEOUT_MS = readPositiveNumber(
   process.env.KLOUDTRACK_REQUEST_TIMEOUT_MS,
   120_000,
 );
+const KLOUDTRACK_REQUEST_GAP_MS = readPositiveNumber(process.env.KLOUDTRACK_REQUEST_GAP_MS, 350);
+const MAX_RATE_LIMIT_RETRIES = 4;
+const RATE_LIMIT_RETRY_BASE_MS = 5_000;
+
+const globalForKloudtrack = globalThis as unknown as {
+  kloudtrackRequestQueues?: Map<string, KloudtrackRequestQueue>;
+};
+const requestQueues = globalForKloudtrack.kloudtrackRequestQueues ??= new Map<string, KloudtrackRequestQueue>();
+
+export class KloudtrackRateLimitError extends Error {
+  constructor(readonly retryAfterMs: number) {
+    super(`KloudTrack is still limiting requests after ${MAX_RATE_LIMIT_RETRIES} retries. Try again in ${Math.ceil(retryAfterMs / 1000)} seconds.`);
+    this.name = "KloudtrackRateLimitError";
+  }
+}
 
 interface KloudtrackApiResponse<T> {
   success: boolean;
@@ -36,12 +52,41 @@ class KloudtrackApiClient {
     private readonly apiToken?: string,
   ) {}
 
-  async get<T>(endpoint: string): Promise<T> {
+  async get<T>(endpoint: string, signal?: AbortSignal): Promise<T> {
     if (typeof window !== "undefined") {
       throw new Error("Kloudtrack API requests must run on the server");
     }
 
+    const key = JSON.stringify([new URL(this.baseURL).origin, this.apiToken ?? ""]);
+    let queue = requestQueues.get(key);
+    if (!queue) {
+      queue = new KloudtrackRequestQueue(KLOUDTRACK_REQUEST_GAP_MS);
+      requestQueues.set(key, queue);
+    }
+    const requestQueue = queue;
+
+    for (let attempt = 0; ; attempt += 1) {
+      const result = await requestQueue.run(() =>
+        this.getAttempt<T>(endpoint, signal, (retryAfter) => {
+          const delayMs = parseRetryAfter(retryAfter) ?? RATE_LIMIT_RETRY_BASE_MS * 2 ** attempt;
+          requestQueue.defer(delayMs);
+          return delayMs;
+        }), signal);
+
+      if (result.kind === "success") return result.data;
+      if (attempt >= MAX_RATE_LIMIT_RETRIES) throw new KloudtrackRateLimitError(result.retryAfterMs);
+    }
+  }
+
+  private async getAttempt<T>(
+    endpoint: string,
+    signal: AbortSignal | undefined,
+    onRateLimit: (retryAfter: string | null) => number,
+  ): Promise<{ kind: "success"; data: T } | { kind: "rate-limit"; retryAfterMs: number }> {
+    signal?.throwIfAborted();
     const controller = new AbortController();
+    const onAbort = () => controller.abort(signal?.reason);
+    signal?.addEventListener("abort", onAbort, { once: true });
     let timedOut = false;
     const timeout = setTimeout(() => {
       timedOut = true;
@@ -59,7 +104,14 @@ class KloudtrackApiClient {
         signal: controller.signal,
       });
 
+      if (response.status === 429) {
+        const retryAfterMs = onRateLimit(response.headers.get("Retry-After"));
+        await response.body?.cancel();
+        return { kind: "rate-limit", retryAfterMs };
+      }
+
       if (!response.ok) {
+        await response.body?.cancel();
         throw new Error(`Kloudtrack API Error: ${response.status} ${response.statusText}`);
       }
 
@@ -67,8 +119,9 @@ class KloudtrackApiClient {
       if (!apiResponse.success) {
         throw new Error(apiResponse.message || "Kloudtrack API request failed");
       }
-      return apiResponse.data;
+      return { kind: "success", data: apiResponse.data };
     } catch (error) {
+      if (signal?.aborted) throw signal.reason;
       if (timedOut) {
         throw new Error(
           `KloudTrack API request timed out after ${formatTimeoutSeconds(KLOUDTRACK_REQUEST_TIMEOUT_MS)}.`,
@@ -78,6 +131,7 @@ class KloudtrackApiClient {
       throw error;
     } finally {
       clearTimeout(timeout);
+      signal?.removeEventListener("abort", onAbort);
     }
   }
 }
@@ -102,9 +156,10 @@ export async function getAllTelemetryHistoryFromKloudtrackApi(
   stationId: string,
   params: Record<string, string>,
   config: KloudtrackEnvironment | KloudtrackEnvironmentConfig = "live",
+  signal?: AbortSignal,
 ): Promise<TelemetryHistoryMetricRaw> {
   const queryString = new URLSearchParams(params).toString();
-  return getKloudtrackApi(config).get<TelemetryHistoryMetricRaw>(`/telemetry/station/${stationId}/history?${queryString}`);
+  return getKloudtrackApi(config).get<TelemetryHistoryMetricRaw>(`/telemetry/station/${stationId}/history?${queryString}`, signal);
 }
 
 export async function getDashboardDataFromKloudtrackApi(
@@ -198,6 +253,17 @@ function readMetricValue(
 function readPositiveNumber(value: string | undefined, fallback: number) {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function parseRetryAfter(value: string | null): number | null {
+  if (!value?.trim()) return null;
+  const seconds = Number(value);
+  if (!Number.isNaN(seconds)) {
+    const delayMs = seconds * 1000;
+    return Number.isFinite(delayMs) && delayMs >= 0 ? delayMs : null;
+  }
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? Math.max(0, timestamp - Date.now()) : null;
 }
 
 function formatTimeoutSeconds(timeoutMs: number) {

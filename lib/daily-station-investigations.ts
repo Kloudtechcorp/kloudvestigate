@@ -1,6 +1,6 @@
-import { Prisma } from "@/app/generated/prisma/client";
+import { Prisma, type DailyStationSummary } from "@/app/generated/prisma/client";
 import type { InvestigationResponse, StationsResponse } from "@/components/telemetry/types";
-import { prisma } from "@/lib/prisma";
+import { getPrisma } from "@/lib/prisma";
 import { invalidateAuditReportDate } from "@/lib/audit-report-cache";
 
 const PHT_OFFSET_MS = 8 * 60 * 60_000;
@@ -36,6 +36,8 @@ export async function runDailyStationInvestigations({
 }: RunDailyStationInvestigationsOptions) {
   const scope = getPhilippineDayScope(dateKey);
   if (!scope) throw new Error("Date must use YYYY-MM-DD format.");
+  // Fail before fetching telemetry when audit persistence is unavailable.
+  getPrisma();
 
   const requestHeaders = buildInternalRequestHeaders();
   const stationsResponse = await fetch(new URL("/api/stations", requestUrl), {
@@ -166,6 +168,7 @@ async function storeReport(
   summaryDate: Date,
   replaceExisting: boolean,
 ) {
+  const prisma = getPrisma();
   const analyses = investigation.metricAnalyses ?? [];
   const missingCount = analyses.reduce(
     (total, item) => total + item.analysis.summary.missingRecordCount,
@@ -277,6 +280,7 @@ async function storeReport(
 }
 
 async function loadStoredReport(stationId: string, summaryDate: Date) {
+  const prisma = getPrisma();
   const report = await prisma.dailyStationSummary.findUnique({
     where: { stationId_summaryDate: { stationId, summaryDate } },
     include: { auditLogs: true },
@@ -284,7 +288,7 @@ async function loadStoredReport(stationId: string, summaryDate: Date) {
   return report ? serializeReport(report) : null;
 }
 
-function serializeReport(report: NonNullable<Awaited<ReturnType<typeof prisma.dailyStationSummary.findUnique>>> & {
+function serializeReport(report: DailyStationSummary & {
   auditLogs?: Array<{ id: bigint; summaryId: bigint }>;
 }) {
   return {

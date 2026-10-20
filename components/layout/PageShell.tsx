@@ -18,6 +18,7 @@ const NAV_LINKS: PageNavLink[] = [
   { href: "/", label: "Audit" },
   { href: "/investigate", label: "Custom Investigation" },
   { href: "/pubmat", label: "Daily Readings" },
+  { href: "/uptime", label: "Uptime" },
   { href: "/config", label: "Config" },
   { href: "/architecture", label: "Architecture" },
 ];

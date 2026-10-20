@@ -7,13 +7,20 @@ const globalForPrisma = globalThis as unknown as {
 
 function createPrismaClient() {
   const connectionString = process.env.DATABASE_URL;
-  if (!connectionString) throw new Error("DATABASE_URL is not configured.");
+  if (!connectionString) {
+    throw new Error("Audit storage is not configured. Set DATABASE_URL in .env and run the database migrations.");
+  }
 
   return new PrismaClient({
     adapter: new PrismaPg(connectionString),
   });
 }
 
-export const prisma = globalForPrisma.prisma ?? createPrismaClient();
+let prisma: PrismaClient | undefined = globalForPrisma.prisma;
 
-if (process.env.NODE_ENV !== "production") globalForPrisma.prisma = prisma;
+export function getPrisma(): PrismaClient {
+  // Initialize inside request handlers so configuration errors can be handled there.
+  prisma ??= createPrismaClient();
+  if (process.env.NODE_ENV !== "production") globalForPrisma.prisma = prisma;
+  return prisma;
+}

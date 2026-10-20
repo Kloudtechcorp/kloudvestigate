@@ -1,5 +1,5 @@
 import { authorizeCron } from "@/lib/cron-auth";
-import { prisma } from "@/lib/prisma";
+import { getPrisma } from "@/lib/prisma";
 import { invalidateAllAuditReports } from "@/lib/audit-report-cache";
 
 export const dynamic = "force-dynamic";
@@ -13,6 +13,7 @@ export async function GET(request: Request) {
   const month = getCurrentPhilippineMonthScope();
 
   try {
+    const prisma = getPrisma();
     const deleted = await prisma.stationAuditLog.deleteMany({
       where: {
         OR: [
