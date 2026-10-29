@@ -12,8 +12,10 @@ import {
   Maximize2,
   Minimize2,
   RefreshCw,
+  Rows3,
   TriangleAlert,
 } from "lucide-react";
+import { StationReadingsDialog, type StationReadingsTarget } from "./StationReadingsDialog";
 
 type CalendarSummary = {
   date: string;
@@ -93,6 +95,7 @@ export function AuditCalendarWorkspace({
   const [refreshKey, setRefreshKey] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [readingsTarget, setReadingsTarget] = useState<StationReadingsTarget | null>(null);
   const today = useMemo(() => getCurrentPhtDate(), []);
   const yesterday = useMemo(() => offsetDate(today, -1), [today]);
 
@@ -497,7 +500,15 @@ export function AuditCalendarWorkspace({
               summaries={dailySummaries}
               onShowWarnings={() => showStationWarnings(selectedDate)}
             />
-            <StationDateSummary date={selectedDate} summaries={dailySummaries} />
+            <StationDateSummary
+              date={selectedDate}
+              summaries={dailySummaries}
+              onViewReadings={(summary) => setReadingsTarget({
+                date: selectedDate,
+                stationId: summary.stationId,
+                stationName: summary.stationName,
+              })}
+            />
             {detailsLoaded ? (
               <AuditDetails date={selectedDate} rangeRows={rangeRows} missingRows={missingRows} />
             ) : (
@@ -528,6 +539,13 @@ export function AuditCalendarWorkspace({
           />
         </div>
       )}
+      {readingsTarget ? (
+        <StationReadingsDialog
+          key={`${readingsTarget.date}:${readingsTarget.stationId}`}
+          target={readingsTarget}
+          onClose={() => setReadingsTarget(null)}
+        />
+      ) : null}
     </div>
   );
 }
@@ -743,7 +761,15 @@ function CompactMonthGrid({
   );
 }
 
-function StationDateSummary({ date, summaries }: { date: string; summaries: DailySummary[] }) {
+function StationDateSummary({
+  date,
+  summaries,
+  onViewReadings,
+}: {
+  date: string;
+  summaries: DailySummary[];
+  onViewReadings: (summary: DailySummary) => void;
+}) {
   const errorSummaries = summaries.filter(needsAttention).sort(compareStationPriority);
   const clearSummaries = summaries.filter((summary) => !needsAttention(summary)).sort((a, b) => {
     const groupSort = getStationGroup(a.stationName).localeCompare(
@@ -763,6 +789,7 @@ function StationDateSummary({ date, summaries }: { date: string; summaries: Dail
         summaries={errorSummaries}
         isErrorTable
         emptyMessage={summaries.length ? "No stations require attention for this date." : "No station summaries recorded for this date."}
+        onViewReadings={onViewReadings}
       />
       <StationSummaryTable
         id="audit-clear-stations"
@@ -770,6 +797,7 @@ function StationDateSummary({ date, summaries }: { date: string; summaries: Dail
         description={`Stations within acceptable limits for ${formatDate(date)}. Fewer than ${MISSING_ATTENTION_THRESHOLD} missing records per station is within tolerance.`}
         summaries={clearSummaries}
         emptyMessage={summaries.length ? "No clear stations for this date." : "No station summaries recorded for this date."}
+        onViewReadings={onViewReadings}
       />
     </>
   );
@@ -782,6 +810,7 @@ function StationSummaryTable({
   summaries,
   isErrorTable = false,
   emptyMessage,
+  onViewReadings,
 }: {
   id: string;
   title: string;
@@ -789,6 +818,7 @@ function StationSummaryTable({
   summaries: DailySummary[];
   isErrorTable?: boolean;
   emptyMessage: string;
+  onViewReadings: (summary: DailySummary) => void;
 }) {
   return (
     <section
@@ -820,6 +850,7 @@ function StationSummaryTable({
               <th scope="col" aria-sort={isErrorTable ? "descending" : undefined}>Out of range{isErrorTable ? " ↓" : ""}</th>
               <th scope="col">Range violations by metric</th>
               <th scope="col">Status</th>
+              <th scope="col" className="w-[110px]">Readings</th>
             </tr>
           </thead>
           <tbody>
@@ -864,10 +895,21 @@ function StationSummaryTable({
                       {requiresAttention ? "Attention" : "Clear"}
                     </span>
                   </td>
+                  <td>
+                    <button
+                      aria-label={`View ${summary.stationName} readings`}
+                      className="nav-pill inline-flex items-center gap-1.5 whitespace-nowrap"
+                      onClick={() => onViewReadings(summary)}
+                      type="button"
+                    >
+                      <Rows3 className="h-3.5 w-3.5" aria-hidden="true" />
+                      View
+                    </button>
+                  </td>
                 </tr>
               );
             }) : (
-              <tr><td colSpan={5} className="py-8 text-center text-text-muted">{emptyMessage}</td></tr>
+              <tr><td colSpan={6} className="py-8 text-center text-text-muted">{emptyMessage}</td></tr>
             )}
           </tbody>
         </table>

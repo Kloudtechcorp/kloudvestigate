@@ -184,6 +184,7 @@ export function normalizeStation(station: StationRaw): StationMetadata {
     state: station.state,
     organizationName: station.organization?.organizationName ?? null,
     isActive: station.isActive,
+    activatedAt: station.activatedAt,
   };
 }
 

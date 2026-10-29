@@ -7,6 +7,7 @@ import {
 import {
   getAllTelemetryHistoryFromKloudtrackApi,
   getTelemetryMetricHistoryFromKloudtrackApi,
+  KloudtrackRateLimitError,
   normalizeAllTelemetry,
   normalizeTelemetry,
 } from "@/lib/kloudtrack-api";
@@ -139,7 +140,7 @@ export async function POST(request: Request) {
     };
     const metricAnalyses = analyzeMetricSeries(aggregatedSource.series, selection, metricRangeOverrides);
     const primary = metricAnalyses[0];
-    if (!primary) throw new Error("No telemetry records were available for the selected metric.");
+    if (!primary) throw new NoTelemetryError();
 
     const pointMatch = body.pointTimestamp
       ? findPointInTime(primary.records, body.pointTimestamp)
@@ -170,13 +171,24 @@ export async function POST(request: Request) {
 
     return Response.json(payload);
   } catch (error) {
+    const rateLimited = error instanceof KloudtrackRateLimitError;
     return Response.json(
       {
         error: "Investigation failed",
         message: error instanceof Error ? error.message : "Unknown error",
+        // Lets the daily audit tell an offline station or a rate limit apart from a failed request.
+        ...(error instanceof NoTelemetryError ? { code: "no_telemetry" } : {}),
+        ...(rateLimited ? { code: "rate_limited" } : {}),
       },
-      { status: 400 },
+      { status: rateLimited ? 429 : 400 },
     );
+  }
+}
+
+class NoTelemetryError extends Error {
+  constructor() {
+    super("No telemetry records were available for the selected metric.");
+    this.name = "NoTelemetryError";
   }
 }
 

@@ -431,7 +431,7 @@ async function readPubmatStream(
   processLine(buffer);
 }
 
-function StatusChip({ status }: { status: PubmatQuickFetchStatus }) {
+export function StatusChip({ status }: { status: PubmatQuickFetchStatus }) {
   const label = status === "ready"
     ? "Ready"
     : status === "attention"
@@ -450,7 +450,7 @@ function StatusChip({ status }: { status: PubmatQuickFetchStatus }) {
   return <span className={className}>{label}</span>;
 }
 
-function getStatusRowClass(status: PubmatQuickFetchStatus) {
+export function getStatusRowClass(status: PubmatQuickFetchStatus) {
   if (status === "ready") return "bg-success-bg";
   if (status === "attention") return "bg-warning-bg";
   if (status === "missing") return "bg-missing-bg";

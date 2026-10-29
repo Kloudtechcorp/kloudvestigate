@@ -67,6 +67,7 @@ export interface StationMetadata {
   state: string;
   organizationName: string | null;
   isActive: boolean;
+  activatedAt?: string | null;
 }
 
 export interface TelemetryRecord {

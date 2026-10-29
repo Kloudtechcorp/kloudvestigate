@@ -2,11 +2,40 @@ import { Prisma, type DailyStationSummary } from "@/app/generated/prisma/client"
 import type { InvestigationResponse, StationsResponse } from "@/components/telemetry/types";
 import { getPrisma } from "@/lib/prisma";
 import { invalidateAuditReportDate } from "@/lib/audit-report-cache";
+import { isAuditLogRetained } from "@/lib/audit-retention";
+import type { StationMetadata } from "@/lib/telemetry-types";
 
 const PHT_OFFSET_MS = 8 * 60 * 60_000;
+const MINUTES_PER_DAY = 24 * 60;
 const REQUEST_GAP_MS = 600;
 const REPORT_TRANSACTION_MAX_WAIT_MS = 10_000;
 const REPORT_TRANSACTION_TIMEOUT_MS = 30_000;
+
+/** KloudTrack kept rate-limiting after its retries; callers should stop and resume later. */
+export class AuditRateLimitError extends Error {
+  constructor(message = "KloudTrack is rate-limiting requests. Try again later.") {
+    super(message);
+    this.name = "AuditRateLimitError";
+  }
+}
+
+type DayScope = NonNullable<ReturnType<typeof getPhilippineDayScope>>;
+
+type ReportData = {
+  summary: {
+    stationId: string;
+    stationName: string;
+    summaryDate: Date;
+    missingCount: number;
+    rangeViolationCount: number;
+    rangeViolationSummary: Prisma.InputJsonObject;
+  };
+  auditLogs: Array<{
+    type: "rangeViolation" | "missing";
+    eventDate: Date;
+    rowContents?: Prisma.InputJsonObject;
+  }>;
+};
 
 type RunDailyStationInvestigationsOptions = {
   requestUrl: string;
@@ -44,7 +73,11 @@ export async function runDailyStationInvestigations({
     headers: requestHeaders,
     cache: "no-store",
   });
-  if (!stationsResponse.ok) throw new Error(`Station lookup failed (${stationsResponse.status}).`);
+  if (!stationsResponse.ok) {
+    const failure = await readErrorPayload(stationsResponse);
+    if (failure.code === "rate_limited") throw new AuditRateLimitError(failure.message);
+    throw new Error(`Station lookup failed (${stationsResponse.status}).`);
+  }
 
   const stationPayload = await readJsonResponse<StationsResponse>(
     stationsResponse,
@@ -57,6 +90,7 @@ export async function runDailyStationInvestigations({
   await onInit?.({ stationCount: stations.length });
 
   const reports = [];
+  let rateLimited = false;
   for (const [index, station] of stations.entries()) {
     await onStationStart?.({
       stationId: station.id,
@@ -82,31 +116,7 @@ export async function runDailyStationInvestigations({
     }
 
     try {
-      const investigationResponse = await fetch(new URL("/api/investigations", requestUrl), {
-        method: "POST",
-        headers: { ...requestHeaders, "Content-Type": "application/json" },
-        body: JSON.stringify({
-          stationId: station.id,
-          metric: "all",
-          aggregationMinutes: 1,
-          start: scope.start,
-          end: scope.end,
-          useDemoData: false,
-          bypassCache: true,
-        }),
-        cache: "no-store",
-      });
-
-      if (!investigationResponse.ok) {
-        throw new Error(`Investigation request failed (${investigationResponse.status}).`);
-      }
-
-      const investigation = await readJsonResponse<InvestigationResponse>(
-        investigationResponse,
-        "Investigation request",
-      );
-      const report = await storeReport(investigation, scope.summaryDate, replaceExisting);
-      reports.push({ stationId: station.id, status: replaceExisting ? "replaced" : "created", report });
+      reports.push(await auditStation(station, scope, requestUrl, requestHeaders, replaceExisting));
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown station investigation error";
       console.error(
@@ -114,6 +124,7 @@ export async function runDailyStationInvestigations({
         error,
       );
       reports.push({ stationId: station.id, status: "failed", message });
+      rateLimited = error instanceof AuditRateLimitError;
     }
 
     await onStationComplete?.({
@@ -124,6 +135,8 @@ export async function runDailyStationInvestigations({
       status: reports.at(-1)?.status ?? "failed",
     });
 
+    // Retrying the remaining stations would only extend the rate limit.
+    if (rateLimited) break;
     if (index < stations.length - 1) await wait(REQUEST_GAP_MS);
   }
 
@@ -131,6 +144,7 @@ export async function runDailyStationInvestigations({
     reportDate: scope.dateKey,
     timezone: "Asia/Manila",
     stationCount: stations.length,
+    rateLimited,
     reports,
   };
 }
@@ -163,12 +177,89 @@ export function getPhilippineDayScope(dateKey: string) {
   };
 }
 
-async function storeReport(
-  investigation: InvestigationResponse,
-  summaryDate: Date,
+async function auditStation(
+  station: StationMetadata,
+  scope: DayScope,
+  requestUrl: string,
+  requestHeaders: Record<string, string>,
   replaceExisting: boolean,
 ) {
-  const prisma = getPrisma();
+  const investigationResponse = await fetch(new URL("/api/investigations", requestUrl), {
+    method: "POST",
+    headers: { ...requestHeaders, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      stationId: station.id,
+      metric: "all",
+      aggregationMinutes: 1,
+      start: scope.start,
+      end: scope.end,
+      useDemoData: false,
+      bypassCache: true,
+    }),
+    cache: "no-store",
+  });
+
+  if (!investigationResponse.ok) {
+    const failure = await readErrorPayload(investigationResponse);
+    if (failure.code === "rate_limited") throw new AuditRateLimitError(failure.message);
+    if (failure.code !== "no_telemetry") {
+      throw new Error(
+        `Investigation request failed (${investigationResponse.status})${failure.message ? `: ${failure.message}` : "."}`,
+      );
+    }
+
+    // A station that sent nothing is only an audit finding once it existed for the whole day.
+    if (!await stationExistedBefore(station, scope)) {
+      return { stationId: station.id, status: "not_created" };
+    }
+    const report = await saveReport(buildNoDataReport(station, scope), replaceExisting);
+    return { stationId: station.id, status: "no_data", report };
+  }
+
+  const investigation = await readJsonResponse<InvestigationResponse>(
+    investigationResponse,
+    "Investigation request",
+  );
+  const report = await saveReport(buildInvestigationReport(investigation, scope.summaryDate), replaceExisting);
+  return { stationId: station.id, status: replaceExisting ? "replaced" : "created", report };
+}
+
+async function stationExistedBefore(station: StationMetadata, scope: DayScope) {
+  const activatedAt = station.activatedAt ? Date.parse(station.activatedAt) : Number.NaN;
+  if (!Number.isNaN(activatedAt) && toPhilippineDateKey(activatedAt) < scope.dateKey) return true;
+
+  // KloudTrack resets activatedAt when a station is reactivated, so an earlier saved report
+  // also proves the station existed. Backfills therefore rebuild the oldest day first.
+  const earlierReport = await getPrisma().dailyStationSummary.findFirst({
+    where: { stationId: station.id, summaryDate: { lt: scope.summaryDate } },
+    select: { id: true },
+  });
+  return Boolean(earlierReport);
+}
+
+function buildNoDataReport(station: StationMetadata, scope: DayScope): ReportData {
+  return {
+    summary: {
+      stationId: station.id,
+      stationName: station.name,
+      summaryDate: scope.summaryDate,
+      missingCount: MINUTES_PER_DAY,
+      rangeViolationCount: 0,
+      rangeViolationSummary: {},
+    },
+    auditLogs: [{
+      type: "missing",
+      eventDate: scope.summaryDate,
+      rowContents: {
+        reason: "noTelemetry",
+        missingCount: MINUTES_PER_DAY,
+        periods: [{ start: scope.start, end: scope.end, missingCount: MINUTES_PER_DAY }],
+      },
+    }],
+  };
+}
+
+function buildInvestigationReport(investigation: InvestigationResponse, summaryDate: Date): ReportData {
   const analyses = investigation.metricAnalyses ?? [];
   const missingCount = analyses.reduce(
     (total, item) => total + item.analysis.summary.missingRecordCount,
@@ -212,28 +303,38 @@ async function storeReport(
       } satisfies Prisma.InputJsonObject,
     }));
 
-  const summaryData = {
-    stationId: investigation.station.id,
-    stationName: investigation.station.name,
-    summaryDate,
-    missingCount,
-    rangeViolationCount,
-    rangeViolationSummary,
+  return {
+    summary: {
+      stationId: investigation.station.id,
+      stationName: investigation.station.name,
+      summaryDate,
+      missingCount,
+      rangeViolationCount,
+      rangeViolationSummary,
+    },
+    auditLogs: [
+      ...rangeViolationLogs,
+      ...missingLogs,
+      ...(missingCount > 0 && missingLogs.length === 0
+        ? [{ type: "missing" as const, eventDate: summaryDate }]
+        : []),
+    ],
   };
-  const auditLogs = [
-    ...rangeViolationLogs,
-    ...missingLogs,
-    ...(missingCount > 0 && missingLogs.length === 0
-      ? [{ type: "missing" as const, eventDate: summaryDate }]
-      : []),
-  ];
+}
+
+async function saveReport({ summary: summaryData, auditLogs: allAuditLogs }: ReportData, replaceExisting: boolean) {
+  const prisma = getPrisma();
+  const { stationId, summaryDate } = summaryData;
+  // The nightly retention job deletes logs outside the current month, so rebuilding
+  // older dates keeps only the summary instead of writing logs that are about to be deleted.
+  const auditLogs = isAuditLogRetained(summaryDate) ? allAuditLogs : [];
 
   try {
     if (replaceExisting) {
       await prisma.$transaction(
         async (transaction) => {
           await transaction.dailyStationSummary.deleteMany({
-            where: { stationId: investigation.station.id, summaryDate },
+            where: { stationId, summaryDate },
           });
 
           const summary = await transaction.dailyStationSummary.create({
@@ -257,7 +358,7 @@ async function storeReport(
 
       invalidateAuditReportDate(summaryDate.toISOString().slice(0, 10));
 
-      return loadStoredReport(investigation.station.id, summaryDate);
+      return loadStoredReport(stationId, summaryDate);
     }
 
     const report = await prisma.dailyStationSummary.create({
@@ -273,7 +374,7 @@ async function storeReport(
     return serializeReport(report);
   } catch (error) {
     if (!replaceExisting && error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
-      return loadStoredReport(investigation.station.id, summaryDate);
+      return loadStoredReport(stationId, summaryDate);
     }
     throw error;
   }
@@ -331,6 +432,18 @@ async function readJsonResponse<T>(response: Response, label: string): Promise<T
   } catch {
     throw new Error(`${label} returned invalid JSON (${response.status}).`);
   }
+}
+
+async function readErrorPayload(response: Response): Promise<{ code?: string; message?: string }> {
+  try {
+    return await response.json() as { code?: string; message?: string };
+  } catch {
+    return {};
+  }
+}
+
+function toPhilippineDateKey(time: number) {
+  return new Date(time + PHT_OFFSET_MS).toISOString().slice(0, 10);
 }
 
 function wait(ms: number) {

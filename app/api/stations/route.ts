@@ -1,6 +1,7 @@
 import { assertInternalAccess } from "@/lib/auth";
 import {
   getDashboardDataFromKloudtrackApi,
+  KloudtrackRateLimitError,
   normalizeDashboardStations,
 } from "@/lib/kloudtrack-api";
 import { resolveKloudtrackConfigFromRequest } from "@/lib/kloudtrack-environment";
@@ -31,12 +32,14 @@ export async function GET(request: Request) {
       environment: kloudtrackConfig.environment,
     });
   } catch (error) {
+    const rateLimited = error instanceof KloudtrackRateLimitError;
     return Response.json(
       {
         error: "Station list failed",
         message: error instanceof Error ? error.message : "Unknown dashboard API error",
+        ...(rateLimited ? { code: "rate_limited" } : {}),
       },
-      { status: 502 },
+      { status: rateLimited ? 429 : 502 },
     );
   }
 }

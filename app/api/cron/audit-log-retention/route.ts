@@ -1,10 +1,9 @@
 import { authorizeCron } from "@/lib/cron-auth";
 import { getPrisma } from "@/lib/prisma";
 import { invalidateAllAuditReports } from "@/lib/audit-report-cache";
+import { getCurrentPhilippineMonthScope } from "@/lib/audit-retention";
 
 export const dynamic = "force-dynamic";
-
-const PHT_OFFSET_MS = 8 * 60 * 60_000;
 
 export async function GET(request: Request) {
   const denied = authorizeCron(request);
@@ -41,16 +40,4 @@ export async function GET(request: Request) {
       { status: 500 },
     );
   }
-}
-
-function getCurrentPhilippineMonthScope(now = new Date()) {
-  const phtNow = new Date(now.getTime() + PHT_OFFSET_MS);
-  const year = phtNow.getUTCFullYear();
-  const month = phtNow.getUTCMonth();
-
-  return {
-    key: `${year}-${String(month + 1).padStart(2, "0")}`,
-    start: new Date(Date.UTC(year, month, 1)),
-    end: new Date(Date.UTC(year, month + 1, 1)),
-  };
 }
