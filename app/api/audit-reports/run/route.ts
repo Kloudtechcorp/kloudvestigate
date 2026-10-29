@@ -40,7 +40,7 @@ export async function POST(request: Request) {
       {
         error: "Manual audit rebuild failed",
         message: error instanceof Error ? error.message : "Unknown rebuild error",
-        ...(rateLimited ? { code: "rate_limited" } : {}),
+        ...(rateLimited ? { code: "rate_limited", retryAfterMs: error.retryAfterMs } : {}),
       },
       { status: rateLimited ? 429 : 500 },
     );
@@ -65,11 +65,17 @@ function streamRebuild(request: Request, date: string, stationId: string | undef
           onStationStart: (progress) => send("station_start", progress),
           onStationComplete: (progress) => send("result", progress),
         });
-        send("done", { stationCount: result.stationCount, rateLimited: result.rateLimited, reports: result.reports });
+        send("done", {
+          stationCount: result.stationCount,
+          rateLimited: result.rateLimited,
+          retryAfterMs: result.retryAfterMs,
+          reports: result.reports,
+        });
       } catch (error) {
         send("error", {
           message: error instanceof Error ? error.message : "Unknown rebuild error",
           rateLimited: error instanceof AuditRateLimitError,
+          retryAfterMs: error instanceof AuditRateLimitError ? error.retryAfterMs : null,
         });
       } finally {
         controller.close();

@@ -7,6 +7,9 @@ import {
 } from "./kloudtrack-api";
 import type { KloudtrackEnvironmentConfig } from "./kloudtrack-environment";
 
+// Most tests exercise retries and pacing, not the request budget; the budget tests below turn it back on.
+process.env.KLOUDTRACK_RATE_LIMITS = "off";
+
 function config(name: string): KloudtrackEnvironmentConfig {
   return { environment: "live", baseURL: `https://${name}.example.test/api`, apiToken: "test-token" };
 }
@@ -167,6 +170,55 @@ test("non-429 errors are not retried and do not break later requests", async (co
   await advance(context, 350);
   await next;
   assert.equal(calls, 2);
+});
+
+// Queues read the budget when they are created, so each budget test uses its own origin.
+function withRateLimits(context: TestContext, limits: string) {
+  process.env.KLOUDTRACK_RATE_LIMITS = limits;
+  process.env.KLOUDTRACK_RATE_LIMIT_SHARE = "1";
+  context.after(() => {
+    process.env.KLOUDTRACK_RATE_LIMITS = "off";
+    delete process.env.KLOUDTRACK_RATE_LIMIT_SHARE;
+  });
+}
+
+test("the request budget delays a request until a window has room", async (context) => {
+  context.mock.timers.enable({ apis: ["Date", "setTimeout"] });
+  withRateLimits(context, "2/10s");
+  let calls = 0;
+  context.mock.method(globalThis, "fetch", async () => {
+    calls += 1;
+    return success();
+  });
+  const upstream = config("budget-wait");
+  const pending = [1, 2, 3].map((index) => getAllTelemetryHistoryFromKloudtrackApi(`station-${index}`, {}, upstream));
+  await advance(context);
+  await advance(context, 350);
+  assert.equal(calls, 2);
+  await advance(context, 9_000);
+  assert.equal(calls, 2);
+  await advance(context, 1_000);
+  await Promise.all(pending);
+  assert.equal(calls, 3);
+});
+
+test("a request that would wait too long for the budget fails fast with a retry time", async (context) => {
+  context.mock.timers.enable({ apis: ["Date", "setTimeout"] });
+  withRateLimits(context, "1/15m");
+  let calls = 0;
+  context.mock.method(globalThis, "fetch", async () => {
+    calls += 1;
+    return success();
+  });
+  const upstream = config("budget-exhausted");
+  await getAllTelemetryHistoryFromKloudtrackApi("station-1", {}, upstream);
+  await assert.rejects(getAllTelemetryHistoryFromKloudtrackApi("station-2", {}, upstream), (error: unknown) => {
+    assert.ok(error instanceof KloudtrackRateLimitError);
+    assert.ok(error.retryAfterMs > 14 * 60_000 && error.retryAfterMs <= 15 * 60_000);
+    assert.match(error.message, /request allowance/);
+    return true;
+  });
+  assert.equal(calls, 1);
 });
 
 test("the request timeout still aborts a stalled fetch", async (context) => {

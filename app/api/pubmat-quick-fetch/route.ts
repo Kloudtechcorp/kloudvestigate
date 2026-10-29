@@ -1,12 +1,11 @@
 import { assertInternalAccess } from "@/lib/auth";
 import {
   getAllTelemetryHistoryFromKloudtrackApi,
-  getDashboardDataFromKloudtrackApi,
   getTelemetryMetricHistoryFromKloudtrackApi,
   normalizeAllTelemetry,
-  normalizeDashboardStations,
   normalizeTelemetry,
 } from "@/lib/kloudtrack-api";
+import { getCachedStations } from "@/lib/kloudtrack-cache";
 import {
   resolveKloudtrackConfigFromRequest,
   type KloudtrackEnvironmentConfig,
@@ -271,9 +270,7 @@ async function loadStations(
   kloudtrackConfig: KloudtrackEnvironmentConfig,
 ): Promise<StationMetadata[]> {
   if (useDemoData) return demoStations;
-
-  const dashboard = await getDashboardDataFromKloudtrackApi(kloudtrackConfig);
-  return normalizeDashboardStations(dashboard);
+  return getCachedStations(kloudtrackConfig);
 }
 
 async function fetchStationBucket(

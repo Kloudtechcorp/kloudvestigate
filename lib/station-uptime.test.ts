@@ -16,6 +16,9 @@ import {
 import { demoStations } from "./mock-telemetry";
 import { loadStationUptime } from "./station-uptime.server";
 
+// These tests send bursts on purpose to check concurrency and retries; the budget has its own tests.
+process.env.KLOUDTRACK_RATE_LIMITS = "off";
+
 const NOW = new Date("2026-10-19T04:30:45.000Z");
 
 test("a completed Philippine day contains exactly 1,440 minutes and excludes the next midnight", () => {

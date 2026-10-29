@@ -3,6 +3,9 @@ import type { InvestigationResponse, StationsResponse } from "@/components/telem
 import { getPrisma } from "@/lib/prisma";
 import { invalidateAuditReportDate } from "@/lib/audit-report-cache";
 import { isAuditLogRetained } from "@/lib/audit-retention";
+import { KloudtrackRateLimitError } from "@/lib/kloudtrack-api";
+import { getStationFirstReadingDate } from "@/lib/kloudtrack-cache";
+import { resolveKloudtrackEnvironmentConfig } from "@/lib/kloudtrack-environment";
 import type { StationMetadata } from "@/lib/telemetry-types";
 
 const PHT_OFFSET_MS = 8 * 60 * 60_000;
@@ -11,9 +14,14 @@ const REQUEST_GAP_MS = 600;
 const REPORT_TRANSACTION_MAX_WAIT_MS = 10_000;
 const REPORT_TRANSACTION_TIMEOUT_MS = 30_000;
 
-/** KloudTrack kept rate-limiting after its retries; callers should stop and resume later. */
+const DEFAULT_RATE_LIMIT_RETRY_MS = 60_000;
+
+/** KloudTrack's limit is reached; callers should stop and try again after `retryAfterMs`. */
 export class AuditRateLimitError extends Error {
-  constructor(message = "KloudTrack is rate-limiting requests. Try again later.") {
+  constructor(
+    message = "KloudTrack is rate-limiting requests. Try again later.",
+    readonly retryAfterMs = DEFAULT_RATE_LIMIT_RETRY_MS,
+  ) {
     super(message);
     this.name = "AuditRateLimitError";
   }
@@ -75,7 +83,7 @@ export async function runDailyStationInvestigations({
   });
   if (!stationsResponse.ok) {
     const failure = await readErrorPayload(stationsResponse);
-    if (failure.code === "rate_limited") throw new AuditRateLimitError(failure.message);
+    if (failure.code === "rate_limited") throw new AuditRateLimitError(failure.message, failure.retryAfterMs);
     throw new Error(`Station lookup failed (${stationsResponse.status}).`);
   }
 
@@ -90,7 +98,7 @@ export async function runDailyStationInvestigations({
   await onInit?.({ stationCount: stations.length });
 
   const reports = [];
-  let rateLimited = false;
+  let rateLimit: AuditRateLimitError | null = null;
   for (const [index, station] of stations.entries()) {
     await onStationStart?.({
       stationId: station.id,
@@ -124,7 +132,7 @@ export async function runDailyStationInvestigations({
         error,
       );
       reports.push({ stationId: station.id, status: "failed", message });
-      rateLimited = error instanceof AuditRateLimitError;
+      rateLimit = asAuditRateLimit(error);
     }
 
     await onStationComplete?.({
@@ -136,7 +144,7 @@ export async function runDailyStationInvestigations({
     });
 
     // Retrying the remaining stations would only extend the rate limit.
-    if (rateLimited) break;
+    if (rateLimit) break;
     if (index < stations.length - 1) await wait(REQUEST_GAP_MS);
   }
 
@@ -144,7 +152,8 @@ export async function runDailyStationInvestigations({
     reportDate: scope.dateKey,
     timezone: "Asia/Manila",
     stationCount: stations.length,
-    rateLimited,
+    rateLimited: Boolean(rateLimit),
+    retryAfterMs: rateLimit?.retryAfterMs ?? null,
     reports,
   };
 }
@@ -184,6 +193,19 @@ async function auditStation(
   requestHeaders: Record<string, string>,
   replaceExisting: boolean,
 ) {
+  // /api/investigations is called without the environment cookie, so the audit always reads live KloudTrack.
+  const kloudtrackConfig = resolveKloudtrackEnvironmentConfig("live");
+  const activated = activatedBefore(station, scope.dateKey);
+  let firstReadingDate: string | null = null;
+  if (!activated && kloudtrackConfig.apiToken) {
+    // KloudTrack resets activatedAt when a station is reactivated, so the first reading decides instead.
+    // Days before it cannot have readings, which saves a KloudTrack download per station-day.
+    firstReadingDate = await getStationFirstReadingDate(station.id, kloudtrackConfig);
+    if (!firstReadingDate || scope.dateKey < firstReadingDate) {
+      return { stationId: station.id, status: "not_created" };
+    }
+  }
+
   const investigationResponse = await fetch(new URL("/api/investigations", requestUrl), {
     method: "POST",
     headers: { ...requestHeaders, "Content-Type": "application/json" },
@@ -195,13 +217,15 @@ async function auditStation(
       end: scope.end,
       useDemoData: false,
       bypassCache: true,
+      // Rebuilds re-download so KloudTrack corrections replace the cached day; backfills reuse it.
+      freshTelemetry: replaceExisting,
     }),
     cache: "no-store",
   });
 
   if (!investigationResponse.ok) {
     const failure = await readErrorPayload(investigationResponse);
-    if (failure.code === "rate_limited") throw new AuditRateLimitError(failure.message);
+    if (failure.code === "rate_limited") throw new AuditRateLimitError(failure.message, failure.retryAfterMs);
     if (failure.code !== "no_telemetry") {
       throw new Error(
         `Investigation request failed (${investigationResponse.status})${failure.message ? `: ${failure.message}` : "."}`,
@@ -209,7 +233,7 @@ async function auditStation(
     }
 
     // A station that sent nothing is only an audit finding once it existed for the whole day.
-    if (!await stationExistedBefore(station, scope)) {
+    if (!activated && !(firstReadingDate && firstReadingDate < scope.dateKey)) {
       return { stationId: station.id, status: "not_created" };
     }
     const report = await saveReport(buildNoDataReport(station, scope), replaceExisting);
@@ -224,17 +248,15 @@ async function auditStation(
   return { stationId: station.id, status: replaceExisting ? "replaced" : "created", report };
 }
 
-async function stationExistedBefore(station: StationMetadata, scope: DayScope) {
+function activatedBefore(station: StationMetadata, dateKey: string) {
   const activatedAt = station.activatedAt ? Date.parse(station.activatedAt) : Number.NaN;
-  if (!Number.isNaN(activatedAt) && toPhilippineDateKey(activatedAt) < scope.dateKey) return true;
+  return !Number.isNaN(activatedAt) && toPhilippineDateKey(activatedAt) < dateKey;
+}
 
-  // KloudTrack resets activatedAt when a station is reactivated, so an earlier saved report
-  // also proves the station existed. Backfills therefore rebuild the oldest day first.
-  const earlierReport = await getPrisma().dailyStationSummary.findFirst({
-    where: { stationId: station.id, summaryDate: { lt: scope.summaryDate } },
-    select: { id: true },
-  });
-  return Boolean(earlierReport);
+function asAuditRateLimit(error: unknown) {
+  if (error instanceof AuditRateLimitError) return error;
+  if (error instanceof KloudtrackRateLimitError) return new AuditRateLimitError(error.message, error.retryAfterMs);
+  return null;
 }
 
 function buildNoDataReport(station: StationMetadata, scope: DayScope): ReportData {
@@ -434,9 +456,9 @@ async function readJsonResponse<T>(response: Response, label: string): Promise<T
   }
 }
 
-async function readErrorPayload(response: Response): Promise<{ code?: string; message?: string }> {
+async function readErrorPayload(response: Response): Promise<{ code?: string; message?: string; retryAfterMs?: number }> {
   try {
-    return await response.json() as { code?: string; message?: string };
+    return await response.json() as { code?: string; message?: string; retryAfterMs?: number };
   } catch {
     return {};
   }

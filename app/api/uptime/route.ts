@@ -1,8 +1,12 @@
 import { assertInternalAccess } from "@/lib/auth";
 import { resolveKloudtrackConfigFromRequest } from "@/lib/kloudtrack-environment";
 import { createUptimeWindow, UptimeInputError } from "@/lib/station-uptime";
-import { loadStationUptime } from "@/lib/station-uptime.server";
+import { loadStationUptime, type TelemetryDayLoader } from "@/lib/station-uptime.server";
 import { KloudtrackRateLimitError } from "@/lib/kloudtrack-api";
+import { getStationTelemetryDay } from "@/lib/kloudtrack-cache";
+
+const loadCachedTelemetryDay: TelemetryDayLoader = (stationId, startMs, config, signal) =>
+  getStationTelemetryDay(stationId, startMs, 1, config, { signal });
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -23,7 +27,13 @@ export async function POST(request: Request) {
       throw new UptimeInputError("Choose a valid station.");
     }
     const window = createUptimeWindow(period, value);
-    const report = await loadStationUptime(stationId, window, resolveKloudtrackConfigFromRequest(request), request.signal);
+    const report = await loadStationUptime(
+      stationId,
+      window,
+      resolveKloudtrackConfigFromRequest(request),
+      request.signal,
+      loadCachedTelemetryDay,
+    );
     return Response.json(report, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     const rateLimited = error instanceof KloudtrackRateLimitError;

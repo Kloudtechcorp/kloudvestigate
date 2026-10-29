@@ -4,7 +4,8 @@ import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
-import { Menu } from "lucide-react";
+import { Clock, LoaderCircle, Menu } from "lucide-react";
+import { usePreviousDataRun } from "@/components/audit/previous-data-runner";
 import { LogoutButton } from "@/components/auth/LogoutButton";
 import { ThemeToggleButton } from "@/components/theme/ThemeToggleButton";
 import { KloudtrackEnvironmentSwitch } from "@/components/telemetry/KloudtrackEnvironmentSwitch";
@@ -61,6 +62,13 @@ export function PageShell({
 
 function AppTopbar() {
   const pathname = usePathname();
+  const previousData = usePreviousDataRun();
+  const previousDataWaiting = previousData.runState === "waiting";
+  // The backfill keeps running on other tabs, so show where it is and link back to it.
+  const showPreviousData = (previousData.runState === "running" || previousDataWaiting) && pathname !== "/previous-data";
+  const previousDataLabel = previousDataWaiting
+    ? "Previous data: waiting for KloudTrack's limit"
+    : `Adding previous data${previousData.progress ? ` · ${previousData.progress.step}` : ""}`;
 
   return (
     <header className="fixed inset-x-0 top-0 z-40 h-12 border-b border-border bg-background">
@@ -122,6 +130,19 @@ function AppTopbar() {
         </details>
 
         <div className="ml-auto flex items-center gap-2">
+          {showPreviousData ? (
+            <Link
+              aria-label={previousDataLabel}
+              className="nav-pill inline-flex items-center gap-2 text-xs"
+              href="/previous-data"
+              title={previousDataLabel}
+            >
+              {previousDataWaiting
+                ? <Clock aria-hidden="true" className="h-3.5 w-3.5 text-warning" />
+                : <LoaderCircle aria-hidden="true" className="h-3.5 w-3.5 animate-spin" />}
+              <span className="hidden lg:inline">{previousDataLabel}</span>
+            </Link>
+          ) : null}
           <KloudtrackEnvironmentSwitch />
           <ThemeToggleButton />
           <LogoutButton />

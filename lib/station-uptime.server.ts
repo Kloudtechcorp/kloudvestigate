@@ -1,14 +1,30 @@
-import { getAllTelemetryHistoryFromKloudtrackApi, normalizeStation } from "./kloudtrack-api";
+import {
+  getAllTelemetryHistoryFromKloudtrackApi,
+  getTelemetryDayFromKloudtrackApi,
+  normalizeStation,
+} from "./kloudtrack-api";
 import type { KloudtrackEnvironmentConfig } from "./kloudtrack-environment";
 import { createDemoTelemetry, demoStations } from "./mock-telemetry";
 import { addUptimeTimestamps, analyzeUptimeCounts, MINUTE_MS, type UptimeReport, type UptimeWindow } from "./station-uptime";
-import type { StationMetadata } from "./telemetry-types";
+import type { StationMetadata, TelemetryHistoryMetricRaw } from "./telemetry-types";
+
+/** Loads one full day of one-minute history; the API route passes a cached loader. */
+export type TelemetryDayLoader = (
+  stationId: string,
+  startMs: number,
+  config: KloudtrackEnvironmentConfig,
+  signal: AbortSignal,
+) => Promise<TelemetryHistoryMetricRaw>;
+
+const downloadTelemetryDay: TelemetryDayLoader = (stationId, startMs, config, signal) =>
+  getTelemetryDayFromKloudtrackApi(stationId, startMs, 1, config, signal);
 
 export async function loadStationUptime(
   stationId: string,
   window: UptimeWindow,
   config: KloudtrackEnvironmentConfig,
   signal?: AbortSignal,
+  loadTelemetryDay: TelemetryDayLoader = downloadTelemetryDay,
 ): Promise<UptimeReport> {
   const counts = new Uint32Array(window.expectedMinutes);
   const startMs = Date.parse(window.start);
@@ -41,12 +57,14 @@ export async function loadStationUptime(
         historySignal.throwIfAborted();
         const chunk = chunks[next++];
         try {
-          const raw = await getAllTelemetryHistoryFromKloudtrackApi(stationId, {
-            skip: "0",
-            interval: "1",
-            startDate: new Date(chunk.start).toISOString(),
-            endDate: new Date(Math.max(chunk.start, chunk.end - 1)).toISOString(),
-          }, config, historySignal);
+          const raw = chunk.end - chunk.start === 1440 * MINUTE_MS
+            ? await loadTelemetryDay(stationId, chunk.start, config, historySignal)
+            : await getAllTelemetryHistoryFromKloudtrackApi(stationId, {
+              skip: "0",
+              interval: "1",
+              startDate: new Date(chunk.start).toISOString(),
+              endDate: new Date(Math.max(chunk.start, chunk.end - 1)).toISOString(),
+            }, config, historySignal);
           historySignal.throwIfAborted();
           station ??= normalizeStation(raw.station);
           // Presence measures station availability, independently of a sensor value's range.

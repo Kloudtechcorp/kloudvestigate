@@ -6,7 +6,11 @@ import type {
   TelemetryRecord,
 } from "./telemetry-types";
 import { allMetricKeys } from "./metric-profiles";
-import { KloudtrackRequestQueue } from "./kloudtrack-request-queue";
+import {
+  KloudtrackRequestQueue,
+  RequestBudgetExceededError,
+  type RequestBudget,
+} from "./kloudtrack-request-queue";
 import {
   resolveKloudtrackEnvironmentConfig,
   type KloudtrackEnvironment,
@@ -19,7 +23,14 @@ const KLOUDTRACK_REQUEST_TIMEOUT_MS = readPositiveNumber(
 );
 const KLOUDTRACK_REQUEST_GAP_MS = readPositiveNumber(process.env.KLOUDTRACK_REQUEST_GAP_MS, 350);
 const MAX_RATE_LIMIT_RETRIES = 4;
+const DAY_MS = 24 * 60 * 60_000;
 const RATE_LIMIT_RETRY_BASE_MS = 5_000;
+// KloudTrack's per-API-key limits (rateLimit.apiKey.middleware.ts), using the stricter 100 / 15 min key check.
+const DEFAULT_RATE_LIMITS = "3/1s,20/1m,100/15m,1000/1h,10000/1d";
+// Headroom for other users of the same key and for server instances that keep their own count.
+const DEFAULT_RATE_LIMIT_SHARE = 0.8;
+const MAX_BUDGET_WAIT_MS = 30_000;
+const DURATION_UNIT_MS: Record<string, number> = { s: 1_000, m: 60_000, h: 3_600_000, d: DAY_MS };
 
 const globalForKloudtrack = globalThis as unknown as {
   kloudtrackRequestQueues?: Map<string, KloudtrackRequestQueue>;
@@ -27,8 +38,11 @@ const globalForKloudtrack = globalThis as unknown as {
 const requestQueues = globalForKloudtrack.kloudtrackRequestQueues ??= new Map<string, KloudtrackRequestQueue>();
 
 export class KloudtrackRateLimitError extends Error {
-  constructor(readonly retryAfterMs: number) {
-    super(`KloudTrack is still limiting requests after ${MAX_RATE_LIMIT_RETRIES} retries. Try again in ${Math.ceil(retryAfterMs / 1000)} seconds.`);
+  constructor(
+    readonly retryAfterMs: number,
+    message = `KloudTrack is still limiting requests after ${MAX_RATE_LIMIT_RETRIES} retries. Try again in ${Math.ceil(retryAfterMs / 1000)} seconds.`,
+  ) {
+    super(message);
     this.name = "KloudtrackRateLimitError";
   }
 }
@@ -60,18 +74,29 @@ class KloudtrackApiClient {
     const key = JSON.stringify([new URL(this.baseURL).origin, this.apiToken ?? ""]);
     let queue = requestQueues.get(key);
     if (!queue) {
-      queue = new KloudtrackRequestQueue(KLOUDTRACK_REQUEST_GAP_MS);
+      queue = new KloudtrackRequestQueue(KLOUDTRACK_REQUEST_GAP_MS, readRequestBudget(), MAX_BUDGET_WAIT_MS);
       requestQueues.set(key, queue);
     }
     const requestQueue = queue;
 
     for (let attempt = 0; ; attempt += 1) {
-      const result = await requestQueue.run(() =>
-        this.getAttempt<T>(endpoint, signal, (retryAfter) => {
-          const delayMs = parseRetryAfter(retryAfter) ?? RATE_LIMIT_RETRY_BASE_MS * 2 ** attempt;
-          requestQueue.defer(delayMs);
-          return delayMs;
-        }), signal);
+      let result: { kind: "success"; data: T } | { kind: "rate-limit"; retryAfterMs: number };
+      try {
+        result = await requestQueue.run(() =>
+          this.getAttempt<T>(endpoint, signal, (retryAfter) => {
+            const delayMs = parseRetryAfter(retryAfter) ?? RATE_LIMIT_RETRY_BASE_MS * 2 ** attempt;
+            requestQueue.defer(delayMs);
+            return delayMs;
+          }), signal);
+      } catch (error) {
+        if (error instanceof RequestBudgetExceededError) {
+          throw new KloudtrackRateLimitError(
+            error.retryAfterMs,
+            `Kloudvestigate has used its KloudTrack request allowance for now. Try again in ${formatWait(error.retryAfterMs)}.`,
+          );
+        }
+        throw error;
+      }
 
       if (result.kind === "success") return result.data;
       if (attempt >= MAX_RATE_LIMIT_RETRIES) throw new KloudtrackRateLimitError(result.retryAfterMs);
@@ -162,6 +187,22 @@ export async function getAllTelemetryHistoryFromKloudtrackApi(
   return getKloudtrackApi(config).get<TelemetryHistoryMetricRaw>(`/telemetry/station/${stationId}/history?${queryString}`, signal);
 }
 
+/** One station's readings for [start, start + 1 day); endDate stops 1 ms early to leave out the next day's first reading. */
+export function getTelemetryDayFromKloudtrackApi(
+  stationId: string,
+  startMs: number,
+  intervalMinutes: number,
+  config: KloudtrackEnvironment | KloudtrackEnvironmentConfig = "live",
+  signal?: AbortSignal,
+): Promise<TelemetryHistoryMetricRaw> {
+  return getAllTelemetryHistoryFromKloudtrackApi(stationId, {
+    skip: "0",
+    interval: String(intervalMinutes),
+    startDate: new Date(startMs).toISOString(),
+    endDate: new Date(startMs + DAY_MS - 1).toISOString(),
+  }, config, signal);
+}
+
 export async function getDashboardDataFromKloudtrackApi(
   config: KloudtrackEnvironment | KloudtrackEnvironmentConfig = "live",
 ): Promise<DashboardRaw> {
@@ -249,6 +290,31 @@ function readMetricValue(
   if (metric === "windDirection") return record.wind?.direction ?? record.windDirection;
   if (metric === "windSpeed") return record.wind?.speed ?? record.windSpeed;
   return record[metric];
+}
+
+/** Reads limits such as "20/1m,100/15m" (or "off") at queue creation, so tests can change them per origin. */
+function readRequestBudget(): RequestBudget {
+  const spec = process.env.KLOUDTRACK_RATE_LIMITS?.trim() || DEFAULT_RATE_LIMITS;
+  if (spec === "off") return [];
+
+  const share = Number(process.env.KLOUDTRACK_RATE_LIMIT_SHARE);
+  const usableShare = Number.isFinite(share) && share > 0 && share <= 1 ? share : DEFAULT_RATE_LIMIT_SHARE;
+  return spec.split(",").flatMap((part) => {
+    const match = /^\s*(\d+)\s*\/\s*(\d+)\s*([smhd])\s*$/.exec(part);
+    if (!match) {
+      console.warn(`Ignoring invalid KLOUDTRACK_RATE_LIMITS entry "${part}".`);
+      return [];
+    }
+    return [{
+      max: Math.max(1, Math.floor(Number(match[1]) * usableShare)),
+      windowMs: Number(match[2]) * DURATION_UNIT_MS[match[3]],
+    }];
+  });
+}
+
+function formatWait(ms: number) {
+  const minutes = Math.ceil(ms / 60_000);
+  return ms < 60_000 ? `${Math.ceil(ms / 1000)} seconds` : `${minutes} minute${minutes === 1 ? "" : "s"}`;
 }
 
 function readPositiveNumber(value: string | undefined, fallback: number) {

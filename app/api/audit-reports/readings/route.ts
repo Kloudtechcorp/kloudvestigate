@@ -1,7 +1,8 @@
 import { assertInternalAccess } from "@/lib/auth";
 import { getCachedDailyAudit } from "@/lib/audit-report-cache";
 import { getPhilippineDayScope } from "@/lib/daily-station-investigations";
-import { getAllTelemetryHistoryFromKloudtrackApi, normalizeAllTelemetry } from "@/lib/kloudtrack-api";
+import { normalizeAllTelemetry } from "@/lib/kloudtrack-api";
+import { getStationTelemetryDay } from "@/lib/kloudtrack-cache";
 import {
   resolveKloudtrackConfigFromRequest,
   type KloudtrackEnvironmentConfig,
@@ -164,12 +165,7 @@ async function loadDayTelemetry(
     };
   }
 
-  const raw = await getAllTelemetryHistoryFromKloudtrackApi(stationId, {
-    skip: "0",
-    interval: intervalMinutes.toString(),
-    startDate: scope.start,
-    endDate: scope.end,
-  }, kloudtrackConfig, signal);
+  const raw = await getStationTelemetryDay(stationId, Date.parse(scope.start), intervalMinutes, kloudtrackConfig, { signal });
   return normalizeAllTelemetry(raw);
 }
 

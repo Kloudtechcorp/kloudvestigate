@@ -11,6 +11,7 @@ import {
   normalizeAllTelemetry,
   normalizeTelemetry,
 } from "@/lib/kloudtrack-api";
+import { getStationTelemetryDay } from "@/lib/kloudtrack-cache";
 import {
   resolveKloudtrackConfigFromRequest,
   type KloudtrackEnvironmentConfig,
@@ -30,6 +31,8 @@ import type {
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
+
+const DAY_MS = 24 * 60 * 60_000;
 
 const validMetrics: InvestigationMetricKey[] = [
   "all",
@@ -106,6 +109,7 @@ export async function POST(request: Request) {
       pointTimestamp?: string;
       useDemoData?: boolean;
       bypassCache?: boolean;
+      freshTelemetry?: boolean;
     };
 
     const metricRangeOverrides = await readMetricRangeOverridesFromCookies();
@@ -130,7 +134,7 @@ export async function POST(request: Request) {
       return Response.json(cached);
     }
 
-    const source = await loadTelemetry(selection, requestedDemoData, kloudtrackConfig);
+    const source = await loadTelemetry(selection, requestedDemoData, kloudtrackConfig, body.freshTelemetry === true);
     const aggregatedSource = {
       station: source.station,
       series: source.series.map((item) => ({
@@ -178,7 +182,7 @@ export async function POST(request: Request) {
         message: error instanceof Error ? error.message : "Unknown error",
         // Lets the daily audit tell an offline station or a rate limit apart from a failed request.
         ...(error instanceof NoTelemetryError ? { code: "no_telemetry" } : {}),
-        ...(rateLimited ? { code: "rate_limited" } : {}),
+        ...(rateLimited ? { code: "rate_limited", retryAfterMs: error.retryAfterMs } : {}),
       },
       { status: rateLimited ? 429 : 400 },
     );
@@ -223,12 +227,13 @@ async function loadTelemetry(
   selection: InvestigationSelection,
   useDemoData: boolean,
   kloudtrackConfig: KloudtrackEnvironmentConfig,
+  freshTelemetry: boolean,
 ): Promise<{
   station: StationMetadata;
   series: Array<{ metric: MetricKey; records: TelemetryRecord[] }>;
 }> {
   if (selection.metric === "all") {
-    return loadAllTelemetry(selection, useDemoData, kloudtrackConfig);
+    return loadAllTelemetry(selection, useDemoData, kloudtrackConfig, freshTelemetry);
   }
 
   if (useDemoData || !kloudtrackConfig.apiToken) {
@@ -267,6 +272,7 @@ async function loadAllTelemetry(
   selection: InvestigationSelection,
   useDemoData: boolean,
   kloudtrackConfig: KloudtrackEnvironmentConfig,
+  freshTelemetry: boolean,
 ) {
   if (useDemoData || !kloudtrackConfig.apiToken) {
     const demoSeries = allMetricKeys.map((metric) => {
@@ -279,12 +285,18 @@ async function loadAllTelemetry(
     };
   }
 
-  const raw = await getAllTelemetryHistoryFromKloudtrackApi(selection.stationId, {
-    skip: "0",
-    interval: selection.aggregationMinutes.toString(),
-    startDate: selection.start,
-    endDate: selection.end,
-  }, kloudtrackConfig);
+  const startMs = Date.parse(selection.start);
+  // Whole days (such as each audit day) share the cached copy that uptime and the readings popup use.
+  const raw = Date.parse(selection.end) - startMs === DAY_MS
+    ? await getStationTelemetryDay(selection.stationId, startMs, selection.aggregationMinutes, kloudtrackConfig, {
+      fresh: freshTelemetry,
+    })
+    : await getAllTelemetryHistoryFromKloudtrackApi(selection.stationId, {
+      skip: "0",
+      interval: selection.aggregationMinutes.toString(),
+      startDate: selection.start,
+      endDate: selection.end,
+    }, kloudtrackConfig);
   return normalizeAllTelemetry(raw);
 }
 

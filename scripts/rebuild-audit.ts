@@ -8,13 +8,14 @@
 // Options:
 //   --skip-existing  Keep stations that already have a report and only fill the gaps.
 //   --station <id>   Rebuild only one station.
-//   --pause <sec>    Wait between days so KloudTrack is not rate-limited (default 15).
+//   --pause <sec>    Wait between days (default 15). If KloudTrack's limit is reached anyway, it waits and continues.
 //   --url <url>      App to call (default http://localhost:3000). Uses INTERNAL_ACCESS_TOKEN from .env.
 //   --dry-run        List the dates without rebuilding anything.
 import "dotenv/config";
 import { parseArgs } from "node:util";
 
 const PHT_OFFSET_MS = 8 * 60 * 60_000;
+const DEFAULT_RATE_LIMIT_WAIT_MS = 60_000;
 
 type Failure = { date: string; station: string; message: string };
 
@@ -50,23 +51,33 @@ async function main() {
   const failures: Failure[] = [];
   for (const [index, date] of dates.entries()) {
     const started = Date.now();
-    try {
-      const result = await rebuildDate(baseUrl, date, options.station, !options["skip-existing"]);
-      failures.push(...result.failures);
-      const parts = [
-        `${result.counts.saved} saved${result.counts.noData ? ` (${result.counts.noData} with no data)` : ""}`,
-        result.counts.kept ? `${result.counts.kept} already saved` : "",
-        result.counts.notCreated ? `${result.counts.notCreated} not created yet` : "",
-        result.failures.length ? `${result.failures.length} failed` : "",
-      ].filter(Boolean);
-      console.log(`${date}: ${parts.join(", ")} of ${result.total} (${Math.round((Date.now() - started) / 1000)}s)`);
-      for (const failure of result.failures) console.log(`  FAILED ${failure.station}: ${failure.message}`);
-      if (result.rateLimited) return stopForRateLimit(date, dates.at(-1)!);
-    } catch (error) {
-      if (error instanceof RateLimitedError) return stopForRateLimit(date, dates.at(-1)!);
-      const message = error instanceof Error ? describeFetchError(error) : String(error);
-      failures.push({ date, station: "(whole day)", message });
-      console.log(`${date}: ERROR ${message}`);
+    // A rate limit pauses and retries the same day; with --skip-existing the retry keeps what was saved.
+    while (true) {
+      try {
+        const result = await rebuildDate(baseUrl, date, options.station, !options["skip-existing"]);
+        if (result.rateLimited) {
+          await waitForRateLimit(date, result.retryAfterMs);
+          continue;
+        }
+        failures.push(...result.failures);
+        const parts = [
+          `${result.counts.saved} saved${result.counts.noData ? ` (${result.counts.noData} with no data)` : ""}`,
+          result.counts.kept ? `${result.counts.kept} already saved` : "",
+          result.counts.notCreated ? `${result.counts.notCreated} not created yet` : "",
+          result.failures.length ? `${result.failures.length} failed` : "",
+        ].filter(Boolean);
+        console.log(`${date}: ${parts.join(", ")} of ${result.total} (${Math.round((Date.now() - started) / 1000)}s)`);
+        for (const failure of result.failures) console.log(`  FAILED ${failure.station}: ${failure.message}`);
+      } catch (error) {
+        if (error instanceof RateLimitedError) {
+          await waitForRateLimit(date, error.retryAfterMs);
+          continue;
+        }
+        const message = error instanceof Error ? describeFetchError(error) : String(error);
+        failures.push({ date, station: "(whole day)", message });
+        console.log(`${date}: ERROR ${message}`);
+      }
+      break;
     }
 
     if (index < dates.length - 1 && pauseMs) await wait(pauseMs);
@@ -96,7 +107,7 @@ async function rebuildDate(baseUrl: string, date: string, stationId: string | un
   });
   if (!response.ok || !response.body) {
     const text = await response.text();
-    if (response.status === 429) throw new RateLimitedError();
+    if (response.status === 429) throw new RateLimitedError(readRetryAfterMs(text));
     throw new Error(`HTTP ${response.status}: ${readMessage(text)}`);
   }
 
@@ -105,6 +116,7 @@ async function rebuildDate(baseUrl: string, date: string, stationId: string | un
   const counts = { saved: 0, noData: 0, kept: 0, notCreated: 0 };
   let total = 0;
   let rateLimited = false;
+  let retryAfterMs: number | null = null;
 
   function handleLine(line: string) {
     if (!line.trim()) return;
@@ -123,6 +135,7 @@ async function rebuildDate(baseUrl: string, date: string, stationId: string | un
       }
     } else if (event.event === "done") {
       rateLimited = event.rateLimited === true;
+      retryAfterMs = typeof event.retryAfterMs === "number" ? event.retryAfterMs : null;
       for (const report of event.reports as Array<{ stationId: string; status: string; message?: string }>) {
         if (report.status !== "failed") continue;
         failures.push({
@@ -132,7 +145,9 @@ async function rebuildDate(baseUrl: string, date: string, stationId: string | un
         });
       }
     } else if (event.event === "error") {
-      if (event.rateLimited === true) throw new RateLimitedError();
+      if (event.rateLimited === true) {
+        throw new RateLimitedError(typeof event.retryAfterMs === "number" ? event.retryAfterMs : null);
+      }
       throw new Error(String(event.message));
     }
   }
@@ -154,16 +169,29 @@ async function rebuildDate(baseUrl: string, date: string, stationId: string | un
     if (process.stdout.isTTY) process.stdout.write("\r\x1b[K");
   }
 
-  return { counts, total, failures, rateLimited };
+  return { counts, total, failures, rateLimited, retryAfterMs };
 }
 
-class RateLimitedError extends Error {}
+class RateLimitedError extends Error {
+  constructor(readonly retryAfterMs: number | null) {
+    super("KloudTrack is rate-limiting requests.");
+  }
+}
 
-function stopForRateLimit(date: string, lastDate: string) {
-  console.log(`\nKloudTrack is rate-limiting requests, so the rebuild stopped at ${date}.`);
-  console.log("Wait about 15 minutes, then continue with:");
-  console.log(`  npx tsx scripts/rebuild-audit.ts --from ${date} --to ${lastDate} --skip-existing`);
-  process.exitCode = 2;
+async function waitForRateLimit(date: string, retryAfterMs: number | null) {
+  // A little past the reset so the first retried request is not rejected again.
+  const waitMs = (retryAfterMs ?? DEFAULT_RATE_LIMIT_WAIT_MS) + 5_000;
+  console.log(`${date}: KloudTrack's request limit was reached; waiting ${Math.ceil(waitMs / 60_000)} min, then continuing.`);
+  await wait(waitMs);
+}
+
+function readRetryAfterMs(text: string) {
+  try {
+    const value = (JSON.parse(text) as { retryAfterMs?: unknown }).retryAfterMs;
+    return typeof value === "number" ? value : null;
+  } catch {
+    return null;
+  }
 }
 
 function resolveDates() {
