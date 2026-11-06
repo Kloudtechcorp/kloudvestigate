@@ -94,8 +94,8 @@ export function PubmatQuickFetch({
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
-  // When the server is paused for KloudTrack's per-minute request limit, and when it expects to resume.
-  const [resumeAt, setResumeAt] = useState<number | null>(null);
+  // Set while the server waits for KloudTrack's per-minute request limit before the next station.
+  const [limitWait, setLimitWait] = useState<{ resumeAt: number } | null>(null);
   const [clock, setClock] = useState(() => Date.now());
   const abortControllerRef = useRef<AbortController | null>(null);
   const autoRunStartedRef = useRef(false);
@@ -112,14 +112,15 @@ export function PubmatQuickFetch({
   const safeGapMs = Math.max(requestGapMs || 0, 350);
   const rateLabel = `${(1000 / safeGapMs).toFixed(1)} req/sec`;
   const progressPercent = stationCount ? Math.round((completedCount / stationCount) * 100) : 0;
-  const resumeSeconds = resumeAt === null ? null : Math.max(0, Math.ceil((resumeAt - clock) / 1000));
+  const waiting = running && limitWait !== null;
+  const resumeSeconds = limitWait ? Math.max(0, Math.ceil((limitWait.resumeAt - clock) / 1000)) : 0;
   const autoRunKey = `${initialMetric}:${initialIntervalMinutes}:${autoRun ? "run" : "idle"}`;
 
   useEffect(() => {
-    if (resumeAt === null) return;
+    if (limitWait === null) return;
     const intervalId = globalThis.setInterval(() => setClock(Date.now()), 1000);
     return () => globalThis.clearInterval(intervalId);
-  }, [resumeAt]);
+  }, [limitWait]);
 
   const runQuickFetch = useCallback(async () => {
     if (abortControllerRef.current) return;
@@ -178,10 +179,10 @@ export function PubmatQuickFetch({
           onWaiting(event) {
             const now = Date.now();
             setClock(now);
-            setResumeAt(now + event.waitMs);
+            setLimitWait({ resumeAt: now + event.waitMs });
           },
           onResult(event) {
-            setResumeAt(null);
+            setLimitWait(null);
             upsertStationResult(streamedResults, event.result);
             setResults([...streamedResults]);
             setCompletedCount(streamedResults.length);
@@ -219,7 +220,7 @@ export function PubmatQuickFetch({
       }
     } finally {
       abortControllerRef.current = null;
-      setResumeAt(null);
+      setLimitWait(null);
       setRunning(false);
     }
   }, [intervalMinutes, metric, onDataChange, safeGapMs, timestamp]);
@@ -329,7 +330,7 @@ export function PubmatQuickFetch({
       {(running || results.length) ? (
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
           <div className="h-1.5 flex-1 overflow-hidden rounded-[2px] bg-border">
-            <div className="h-full bg-accent" style={{ width: `${progressPercent}%` }} />
+            <div className={`h-full bg-accent ${waiting ? "animate-pulse" : ""}`} style={{ width: `${progressPercent}%` }} />
           </div>
           <div className="flex flex-wrap items-center gap-2 font-mono text-xs text-text-muted">
             <span>{completedCount} / {stationCount || "?"} stations</span>
@@ -339,10 +340,10 @@ export function PubmatQuickFetch({
         </div>
       ) : null}
 
-      {running && resumeSeconds !== null ? (
-        <div className="border border-border bg-bg-raised px-3 py-2 text-xs text-text-muted">
-          KloudTrack allows 20 requests a minute, so the fetch is paused.
-          {resumeSeconds > 0 ? ` Continuing in about ${resumeSeconds}s.` : " Continuing now."}
+      {waiting ? (
+        <div className="border border-border bg-bg-raised px-3 py-2 text-sm font-semibold text-text-primary" role="status" aria-live="polite">
+          Still loading. KloudTrack allows 20 requests a minute, so the next stations will load
+          {resumeSeconds > 0 ? ` in about ${resumeSeconds}s.` : " now."}
         </div>
       ) : null}
 
