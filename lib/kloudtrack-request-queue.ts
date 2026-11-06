@@ -11,6 +11,13 @@ export class RequestBudgetExceededError extends Error {
   }
 }
 
+export interface QueueRunOptions {
+  /** Overrides the queue's limit, for callers such as a long streaming fetch that can afford to wait. */
+  maxBudgetWaitMs?: number;
+  /** Called before each wait for budget room, with the time left to wait. */
+  onBudgetWait?: (waitMs: number) => void;
+}
+
 export class KloudtrackRequestQueue {
   private tail: Promise<unknown> = Promise.resolve();
   private nextRequestAt = 0;
@@ -27,15 +34,17 @@ export class KloudtrackRequestQueue {
     this.nextRequestAt = Math.max(this.nextRequestAt, Date.now() + delayMs);
   }
 
-  run<T>(request: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+  run<T>(request: () => Promise<T>, signal?: AbortSignal, options: QueueRunOptions = {}): Promise<T> {
+    const maxBudgetWaitMs = options.maxBudgetWaitMs ?? this.maxBudgetWaitMs;
     const pending = this.tail.then(async () => {
       signal?.throwIfAborted();
       while (true) {
         const now = Date.now();
         const budgetWaitMs = this.budgetWaitMs(now);
-        if (budgetWaitMs > this.maxBudgetWaitMs) throw new RequestBudgetExceededError(budgetWaitMs);
+        if (budgetWaitMs > maxBudgetWaitMs) throw new RequestBudgetExceededError(budgetWaitMs);
         const waitMs = Math.max(this.nextRequestAt - now, budgetWaitMs);
         if (waitMs <= 0) break;
+        if (budgetWaitMs > 0) options.onBudgetWait?.(budgetWaitMs);
         await delay(Math.min(waitMs, 2_147_483_647), signal);
       }
       signal?.throwIfAborted();

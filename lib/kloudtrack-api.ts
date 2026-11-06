@@ -9,6 +9,7 @@ import { allMetricKeys } from "./metric-profiles";
 import {
   KloudtrackRequestQueue,
   RequestBudgetExceededError,
+  type QueueRunOptions,
   type RequestBudget,
 } from "./kloudtrack-request-queue";
 import {
@@ -60,13 +61,16 @@ interface DashboardEntryRaw {
 
 type DashboardRaw = DashboardEntryRaw[] | { stations: DashboardEntryRaw[] };
 
+/** How long a request may wait for room in the request budget; the default fails after 30 seconds. */
+export type KloudtrackRequestOptions = QueueRunOptions;
+
 class KloudtrackApiClient {
   constructor(
     private readonly baseURL: string,
     private readonly apiToken?: string,
   ) {}
 
-  async get<T>(endpoint: string, signal?: AbortSignal): Promise<T> {
+  async get<T>(endpoint: string, signal?: AbortSignal, options?: KloudtrackRequestOptions): Promise<T> {
     if (typeof window !== "undefined") {
       throw new Error("Kloudtrack API requests must run on the server");
     }
@@ -87,7 +91,7 @@ class KloudtrackApiClient {
             const delayMs = parseRetryAfter(retryAfter) ?? RATE_LIMIT_RETRY_BASE_MS * 2 ** attempt;
             requestQueue.defer(delayMs);
             return delayMs;
-          }), signal);
+          }), signal, options);
       } catch (error) {
         if (error instanceof RequestBudgetExceededError) {
           throw new KloudtrackRateLimitError(
@@ -166,10 +170,14 @@ export async function getTelemetryMetricHistoryFromKloudtrackApi(
   parameter: MetricKey,
   params: Record<string, string>,
   config: KloudtrackEnvironment | KloudtrackEnvironmentConfig = "live",
+  signal?: AbortSignal,
+  options?: KloudtrackRequestOptions,
 ): Promise<TelemetryHistoryMetricRaw> {
   const queryString = new URLSearchParams(params).toString();
   const raw = await getKloudtrackApi(config).get<TelemetryHistoryMetricRaw>(
     `/telemetry/station/${stationId}/history/${parameter}?${queryString}`,
+    signal,
+    options,
   );
   return {
     ...raw,
@@ -182,9 +190,14 @@ export async function getAllTelemetryHistoryFromKloudtrackApi(
   params: Record<string, string>,
   config: KloudtrackEnvironment | KloudtrackEnvironmentConfig = "live",
   signal?: AbortSignal,
+  options?: KloudtrackRequestOptions,
 ): Promise<TelemetryHistoryMetricRaw> {
   const queryString = new URLSearchParams(params).toString();
-  return getKloudtrackApi(config).get<TelemetryHistoryMetricRaw>(`/telemetry/station/${stationId}/history?${queryString}`, signal);
+  return getKloudtrackApi(config).get<TelemetryHistoryMetricRaw>(
+    `/telemetry/station/${stationId}/history?${queryString}`,
+    signal,
+    options,
+  );
 }
 
 /** One station's readings for [start, start + 1 day); endDate stops 1 ms early to leave out the next day's first reading. */

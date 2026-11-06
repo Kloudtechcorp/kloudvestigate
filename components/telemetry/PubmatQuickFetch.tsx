@@ -40,6 +40,13 @@ type PubmatStreamResultEvent = {
   stationCount: number;
 };
 
+type PubmatStreamWaitingEvent = {
+  event: "waiting";
+  waitMs: number;
+  completedCount: number;
+  stationCount: number;
+};
+
 type PubmatStreamDoneEvent = {
   event: "done";
   stationCount: number;
@@ -54,6 +61,7 @@ type PubmatStreamErrorEvent = {
 type PubmatStreamEvent =
   | PubmatStreamInitEvent
   | PubmatStreamResultEvent
+  | PubmatStreamWaitingEvent
   | PubmatStreamDoneEvent
   | PubmatStreamErrorEvent;
 
@@ -86,6 +94,9 @@ export function PubmatQuickFetch({
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
+  // When the server is paused for KloudTrack's per-minute request limit, and when it expects to resume.
+  const [resumeAt, setResumeAt] = useState<number | null>(null);
+  const [clock, setClock] = useState(() => Date.now());
   const abortControllerRef = useRef<AbortController | null>(null);
   const autoRunStartedRef = useRef(false);
 
@@ -101,7 +112,14 @@ export function PubmatQuickFetch({
   const safeGapMs = Math.max(requestGapMs || 0, 350);
   const rateLabel = `${(1000 / safeGapMs).toFixed(1)} req/sec`;
   const progressPercent = stationCount ? Math.round((completedCount / stationCount) * 100) : 0;
+  const resumeSeconds = resumeAt === null ? null : Math.max(0, Math.ceil((resumeAt - clock) / 1000));
   const autoRunKey = `${initialMetric}:${initialIntervalMinutes}:${autoRun ? "run" : "idle"}`;
+
+  useEffect(() => {
+    if (resumeAt === null) return;
+    const intervalId = globalThis.setInterval(() => setClock(Date.now()), 1000);
+    return () => globalThis.clearInterval(intervalId);
+  }, [resumeAt]);
 
   const runQuickFetch = useCallback(async () => {
     if (abortControllerRef.current) return;
@@ -157,7 +175,13 @@ export function PubmatQuickFetch({
             setStationCount(event.stationCount);
             setCompletedCount(0);
           },
+          onWaiting(event) {
+            const now = Date.now();
+            setClock(now);
+            setResumeAt(now + event.waitMs);
+          },
           onResult(event) {
+            setResumeAt(null);
             upsertStationResult(streamedResults, event.result);
             setResults([...streamedResults]);
             setCompletedCount(streamedResults.length);
@@ -195,6 +219,7 @@ export function PubmatQuickFetch({
       }
     } finally {
       abortControllerRef.current = null;
+      setResumeAt(null);
       setRunning(false);
     }
   }, [intervalMinutes, metric, onDataChange, safeGapMs, timestamp]);
@@ -314,6 +339,13 @@ export function PubmatQuickFetch({
         </div>
       ) : null}
 
+      {running && resumeSeconds !== null ? (
+        <div className="border border-border bg-bg-raised px-3 py-2 text-xs text-text-muted">
+          KloudTrack allows 20 requests a minute, so the fetch is paused.
+          {resumeSeconds > 0 ? ` Continuing in about ${resumeSeconds}s.` : " Continuing now."}
+        </div>
+      ) : null}
+
       {error ? <div className="border-l-4 border-danger bg-danger-bg px-4 py-3 text-sm text-danger">{error}</div> : null}
 
       {results.length ? (
@@ -387,6 +419,7 @@ async function readPubmatStream(
   response: Response,
   handlers: {
     onInit: (event: PubmatStreamInitEvent) => void;
+    onWaiting: (event: PubmatStreamWaitingEvent) => void;
     onResult: (event: PubmatStreamResultEvent) => void;
     onDone: (event: PubmatStreamDoneEvent) => void;
   },
@@ -403,6 +436,10 @@ async function readPubmatStream(
     const event = JSON.parse(line) as PubmatStreamEvent;
     if (event.event === "init") {
       handlers.onInit(event);
+      return;
+    }
+    if (event.event === "waiting") {
+      handlers.onWaiting(event);
       return;
     }
     if (event.event === "result") {

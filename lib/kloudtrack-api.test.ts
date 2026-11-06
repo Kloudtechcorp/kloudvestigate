@@ -221,6 +221,31 @@ test("a request that would wait too long for the budget fails fast with a retry 
   assert.equal(calls, 1);
 });
 
+test("a caller can allow a longer budget wait and is told how long it waits", async (context) => {
+  context.mock.timers.enable({ apis: ["Date", "setTimeout"] });
+  withRateLimits(context, "1/45s");
+  let calls = 0;
+  context.mock.method(globalThis, "fetch", async () => {
+    calls += 1;
+    return success();
+  });
+  const upstream = config("budget-long-wait");
+  const waits: number[] = [];
+  await getAllTelemetryHistoryFromKloudtrackApi("station-1", {}, upstream);
+  // 45 seconds is past the default 30-second limit, so without the option this would fail at once.
+  const pending = getAllTelemetryHistoryFromKloudtrackApi("station-2", {}, upstream, undefined, {
+    maxBudgetWaitMs: 60_000,
+    onBudgetWait: (waitMs) => waits.push(waitMs),
+  });
+  await advance(context);
+  assert.equal(calls, 1);
+  assert.equal(waits.length, 1);
+  assert.ok(waits[0] > 44_000 && waits[0] <= 45_000);
+  await advance(context, 45_000);
+  await pending;
+  assert.equal(calls, 2);
+});
+
 test("the request timeout still aborts a stalled fetch", async (context) => {
   context.mock.timers.enable({ apis: ["Date", "setTimeout"] });
   context.mock.method(globalThis, "fetch", (_url: string, init: RequestInit) => new Promise<Response>((_resolve, reject) => {

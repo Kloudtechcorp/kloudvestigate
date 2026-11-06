@@ -2,8 +2,10 @@ import { assertInternalAccess } from "@/lib/auth";
 import {
   getAllTelemetryHistoryFromKloudtrackApi,
   getTelemetryMetricHistoryFromKloudtrackApi,
+  KloudtrackRateLimitError,
   normalizeAllTelemetry,
   normalizeTelemetry,
+  type KloudtrackRequestOptions,
 } from "@/lib/kloudtrack-api";
 import { getCachedStations } from "@/lib/kloudtrack-cache";
 import {
@@ -44,12 +46,26 @@ interface BucketWindow {
 
 type PubmatQuickFetchResult = Awaited<ReturnType<typeof fetchStationBucket>>;
 
+interface StationRequestContext {
+  signal: AbortSignal;
+  /** Requests may wait for KloudTrack's per-minute allowance until this time, then fail with a retry time. */
+  budgetDeadline: number;
+  onBudgetWait?: (waitMs: number) => void;
+}
+
 const validMetrics: InvestigationMetricKey[] = ["all", ...allMetricKeys];
 const activeFetchKeys = new Set<string>();
+// KloudTrack allows 20 requests a minute per key, so all stations take more than a minute. Waiting
+// is allowed for most of maxDuration; the last minute is left for the final request and response.
+const BUDGET_WAIT_WINDOW_MS = 240_000;
+// Waits of a second or two come from the per-second limit and are not worth reporting.
+const REPORTED_BUDGET_WAIT_MS = 2_000;
 
 export async function POST(request: Request) {
   const denied = assertInternalAccess(request);
   if (denied) return denied;
+
+  const budgetDeadline = Date.now() + BUDGET_WAIT_WINDOW_MS;
 
   try {
     const metricRangeOverrides = await readMetricRangeOverridesFromCookies();
@@ -97,6 +113,7 @@ export async function POST(request: Request) {
         useDemoData,
         kloudtrackConfig,
         metricRangeOverrides,
+        budgetDeadline,
       });
     }
 
@@ -114,6 +131,7 @@ export async function POST(request: Request) {
           useDemoData,
           kloudtrackConfig,
           metricRangeOverrides,
+          { signal: request.signal, budgetDeadline },
         ));
 
         if (index < stations.length - 1 && !request.signal.aborted) {
@@ -139,12 +157,14 @@ export async function POST(request: Request) {
       activeFetchKeys.delete(fetchKey);
     }
   } catch (error) {
+    const rateLimited = error instanceof KloudtrackRateLimitError;
     return Response.json(
       {
         error: "Pubmat quick fetch failed",
         message: error instanceof Error ? error.message : "Unknown request error",
+        ...(rateLimited ? { code: "rate_limited", retryAfterMs: error.retryAfterMs } : {}),
       },
-      { status: 400 },
+      { status: rateLimited ? 429 : 400 },
     );
   }
 }
@@ -161,6 +181,7 @@ function streamPubmatFetch({
   useDemoData,
   kloudtrackConfig,
   metricRangeOverrides,
+  budgetDeadline,
 }: {
   request: Request;
   fetchKey: string;
@@ -173,17 +194,40 @@ function streamPubmatFetch({
   useDemoData: boolean;
   kloudtrackConfig: KloudtrackEnvironmentConfig;
   metricRangeOverrides: Record<string, { minimum: number; maximum: number }>;
+  budgetDeadline: number;
 }) {
   const encoder = new TextEncoder();
   const source = useDemoData ? "demo" : "kloudtrack";
+  // Set once the browser disconnects, so late progress events do not write to a cancelled stream.
+  let closed = false;
 
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       const results: PubmatQuickFetchResult[] = [];
 
       function send(event: string, payload: Record<string, unknown>) {
-        controller.enqueue(encoder.encode(`${JSON.stringify({ event, ...payload })}\n`));
+        if (closed) return;
+        try {
+          controller.enqueue(encoder.encode(`${JSON.stringify({ event, ...payload })}\n`));
+        } catch {
+          closed = true;
+        }
       }
+
+      function close() {
+        if (closed) return;
+        closed = true;
+        controller.close();
+      }
+
+      const requestContext: StationRequestContext = {
+        signal: request.signal,
+        budgetDeadline,
+        onBudgetWait(waitMs) {
+          if (waitMs < REPORTED_BUDGET_WAIT_MS) return;
+          send("waiting", { waitMs, completedCount: results.length, stationCount: stations.length });
+        },
+      };
 
       try {
         send("init", {
@@ -211,6 +255,7 @@ function streamPubmatFetch({
             useDemoData,
             kloudtrackConfig,
             metricRangeOverrides,
+            requestContext,
           );
           results.push(result);
           send("result", {
@@ -228,17 +273,21 @@ function streamPubmatFetch({
           stationCount: stations.length,
           results,
         });
-        controller.close();
+        close();
       } catch (error) {
+        const message = error instanceof Error ? error.message : "Unknown pubmat quick fetch error";
         send("error", {
-          message: error instanceof Error ? error.message : "Unknown pubmat quick fetch error",
+          message: error instanceof KloudtrackRateLimitError
+            ? `Stopped after ${results.length} of ${stations.length} stations. ${message}`
+            : message,
         });
-        controller.close();
+        close();
       } finally {
         activeFetchKeys.delete(fetchKey);
       }
     },
     cancel() {
+      closed = true;
       activeFetchKeys.delete(fetchKey);
     },
   });
@@ -281,9 +330,10 @@ async function fetchStationBucket(
   useDemoData: boolean,
   kloudtrackConfig: KloudtrackEnvironmentConfig,
   metricRangeOverrides: Record<string, { minimum: number; maximum: number }>,
+  requestContext: StationRequestContext,
 ) {
   try {
-    const source = await loadTelemetryForStation(station, metric, window, useDemoData, kloudtrackConfig);
+    const source = await loadTelemetryForStation(station, metric, window, useDemoData, kloudtrackConfig, requestContext);
     const values: Partial<Record<MetricKey, number>> = {};
     const classifications = new Set<string>();
 
@@ -314,6 +364,8 @@ async function fetchStationBucket(
       classifications: !hasAnyValue ? ["no target bucket returned"] : classList,
     };
   } catch (error) {
+    // Out of allowance, every later station would fail the same way, so the whole fetch stops.
+    if (error instanceof KloudtrackRateLimitError) throw error;
     return {
       station,
       status: "failed" satisfies QuickFetchStatus,
@@ -330,8 +382,9 @@ async function loadTelemetryForStation(
   window: BucketWindow,
   useDemoData: boolean,
   kloudtrackConfig: KloudtrackEnvironmentConfig,
+  requestContext: StationRequestContext,
 ): Promise<{ station: StationMetadata; series: Array<{ metric: MetricKey; records: TelemetryRecord[] }> }> {
-  if (metric === "all") return loadAllTelemetryForStation(station, window, useDemoData, kloudtrackConfig);
+  if (metric === "all") return loadAllTelemetryForStation(station, window, useDemoData, kloudtrackConfig, requestContext);
 
   if (useDemoData) {
     const demo = createDemoTelemetry(station.id, metric, window.fetchStart, window.fetchEnd);
@@ -353,7 +406,7 @@ async function loadTelemetryForStation(
     interval: minutesBetween(window.bucketStart, window.bucketEnd).toString(),
     startDate: window.fetchStart,
     endDate: window.fetchEnd,
-  }, kloudtrackConfig);
+  }, kloudtrackConfig, requestContext.signal, requestOptions(requestContext));
   const normalized = normalizeTelemetry(raw);
 
   return {
@@ -367,6 +420,7 @@ async function loadAllTelemetryForStation(
   window: BucketWindow,
   useDemoData: boolean,
   kloudtrackConfig: KloudtrackEnvironmentConfig,
+  requestContext: StationRequestContext,
 ) {
   if (useDemoData) {
     const demoSeries = allMetricKeys.map((metric) => {
@@ -393,9 +447,13 @@ async function loadAllTelemetryForStation(
     interval: minutesBetween(window.bucketStart, window.bucketEnd).toString(),
     startDate: window.fetchStart,
     endDate: window.fetchEnd,
-  }, kloudtrackConfig);
+  }, kloudtrackConfig, requestContext.signal, requestOptions(requestContext));
 
   return normalizeAllTelemetry(raw);
+}
+
+function requestOptions({ budgetDeadline, onBudgetWait }: StationRequestContext): KloudtrackRequestOptions {
+  return { maxBudgetWaitMs: Math.max(0, budgetDeadline - Date.now()), onBudgetWait };
 }
 
 function classifyMetric(analysis: TelemetryAnalysis, timestamp: string) {
